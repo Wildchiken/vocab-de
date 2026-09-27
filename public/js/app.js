@@ -13,7 +13,8 @@ import {
   NO_PLURAL,
 } from './german.js';
 import { dayStart, DAY } from './fsrs.js';
-import { t, fmtIvl, locale, detectLang, setLang, LANGS } from './i18n.js';
+import { t, fmtIvl, locale, detectLang, setLang, getLang, LANGS } from './i18n.js';
+import { sampleWords } from './sample.js';
 import { speak, ttsAvailable } from './tts.js';
 
 const $app = document.getElementById('app');
@@ -37,7 +38,7 @@ const ICON = {
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   search: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M15.5 15.5L20 20" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
   cloud: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18.5h10a4 4 0 0 0 .5-7.97A5.5 5.5 0 0 0 6.9 9 4.8 4.8 0 0 0 7 18.5z" fill="currentColor"/></svg>',
-  book: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11.5A1.5 1.5 0 0 1 18 5.5V20H6.5A1.5 1.5 0 0 1 5 18.5z" fill="currentColor"/></svg>',
+  book: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 6.8C10 5.2 7 4.6 3.5 5.1v13c3.5-.5 6.5.1 8.5 1.6 2-1.5 5-2.1 8.5-1.6v-13C17 4.6 14 5.2 12 6.8z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 6.8v12.9" stroke="currentColor" stroke-width="2"/></svg>',
   down: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   up: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5v-11M7.5 9L12 4.5 16.5 9M5 19.5h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   flame: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c1 3.5 5.5 5.5 5.5 10.5a5.5 5.5 0 0 1-11 0c0-2.5 1.3-4 2.3-5 .2 1.8 1 2.8 2 3.2C10.3 9 11 6 12 3z" fill="currentColor"/></svg>',
@@ -46,7 +47,11 @@ const ICON = {
   target: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>',
   sparkle: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.4L19 10l-5.2 1.6L12 17l-1.8-5.4L5 10l5.2-1.6z" fill="currentColor"/></svg>',
   key: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 12h8M17 12v3M20 12v2.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
-  globe: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13.5 0 16M12 4c-2.5 2.5-2.5 13.5 0 16" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
+  tag: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 12.2V4.5a1 1 0 0 1 1-1h7.7l8.3 8.3a1.5 1.5 0 0 1 0 2.1l-6.1 6.1a1.5 1.5 0 0 1-2.1 0z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.6" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6.5" y="5" width="3.6" height="14" rx="1.2" fill="currentColor"/><rect x="13.9" y="5" width="3.6" height="14" rx="1.2" fill="currentColor"/></svg>',
+  play: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.5 5.2v13.6a1 1 0 0 0 1.5.9l10.8-6.8a1 1 0 0 0 0-1.7L9 4.3a1 1 0 0 0-1.5.9z" fill="currentColor"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 6.5h15M9.5 6V4.5h5V6M6.5 6.5l1 13h9l1-13M10 10v6M14 10v6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    globe: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13.5 0 16M12 4c-2.5 2.5-2.5 13.5 0 16" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
 };
 
 const stripesIcon = '<span class="ic stripes"><i style="background:#0a84ff"></i><i style="background:#ff453a"></i><i style="background:#30d158"></i></span>';
@@ -84,6 +89,52 @@ function toast(msg, opts = {}) {
   el.classList.add('show');
   clearTimeout(toast.t);
   toast.t = setTimeout(hide, action ? Math.max(ms, 4500) : ms);
+}
+
+// In-app alert. Native confirm()/prompt() are blocked in some embedded browsers and return
+// "cancel" immediately, which made actions silently do nothing.
+function dialog({ message, confirm: okLabel = t('ok'), destructive = false, input = null }) {
+  return new Promise((resolve) => {
+    const prev = document.activeElement;
+    const el = document.createElement('div');
+    el.className = 'dialog-backdrop';
+    el.innerHTML = `<div class="dialog glass" role="alertdialog" aria-modal="true" aria-labelledby="dlgMsg">
+      <p id="dlgMsg">${esc(message)}</p>
+      ${input ? `<input class="dialog-input" placeholder="${esc(input.placeholder || '')}" autocomplete="off">` : ''}
+      <div class="dialog-buttons">
+        <button type="button" data-ok="0">${t('cancel')}</button>
+        <button type="button" data-ok="1" class="${destructive ? 'destructive' : 'primary'}">${esc(okLabel)}</button>
+      </div>
+    </div>`;
+    document.body.append(el);
+    const field = el.querySelector('.dialog-input');
+    const close = (ok) => {
+      document.removeEventListener('keydown', onKey, true);
+      el.remove();
+      prev?.focus?.();
+      resolve(input ? (ok ? field.value : null) : ok);
+    };
+    // Capture phase, so study shortcuts don't fire while the dialog is open.
+    const onKey = (e) => {
+      if (e.key === 'Tab') {
+        // keep focus inside the dialog
+        const items = [...el.querySelectorAll('input, button')];
+        const i = items.indexOf(document.activeElement);
+        items[(i + (e.shiftKey ? -1 : 1) + items.length) % items.length].focus();
+      } else if (e.key === 'Escape') close(false);
+      else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') close(true);
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    document.addEventListener('keydown', onKey, true);
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (b) close(b.dataset.ok === '1');
+      else if (e.target === el) close(false);
+    });
+    (field || el.querySelector('[data-ok="1"]')).focus();
+  });
 }
 
 const local = {
@@ -202,10 +253,13 @@ const routes = {
 };
 const TAB_OF = { word: 'words' };
 
+let refreshView = null;
+
 function route() {
   const [name, arg] = location.hash.slice(1).split('/');
   cleanup?.();
   cleanup = null;
+  refreshView = null;
   keyHandler = null;
   current = routes[name] ? name : 'home';
   document.body.dataset.view = current;
@@ -213,6 +267,9 @@ function route() {
   for (const a of document.querySelectorAll('.tabbar a')) {
     a.classList.toggle('active', a.getAttribute('href') === `#${tab}`);
   }
+  // The add button sits outside the capsule; with nothing active inside it, a collapsed
+  // capsule would be an empty bubble.
+  document.body.classList.toggle('tab-outside', !document.querySelector('.tab-capsule a.active'));
   window.scrollTo(0, 0);
   lastY = 0;
   document.body.classList.remove('tab-min');
@@ -244,6 +301,7 @@ function renderSync() {
   const btn = document.getElementById('syncBtn');
   const label = t(`sync.${sync.status}`);
   btn.dataset.status = sync.status;
+  btn.hidden = sync.status === 'off';
   btn.setAttribute('aria-label', label);
   btn.title = sync.status === 'error' ? syncError() : `${label} · ${t('sync.last', { time: relTime(sync.lastSync) })}`;
   const info = document.getElementById('syncInfo');
@@ -282,12 +340,26 @@ function homeView() {
         <div class="list"><pre class="sample" lang="de">${esc(t('home.sample'))}</pre></div>
         <div class="section-footer">${t('home.formatsFoot')}</div>
       </section>
-      <section class="section"><a class="btn" href="#add">${t('home.import')}</a></section>
+      <section class="section home-actions">
+        <a class="btn" href="#add">${t('home.import')}</a>
+        <button class="btn tinted" id="trySample">${t('home.trySample')}</button>
+      </section>
       ${
         sync.status === 'off'
           ? `<section class="section"><div class="list">${row({ title: t('home.syncPromo'), icon: icon('cloud', 'blue'), href: '#settings' })}</div></section>`
           : ''
       }`;
+    $('#trySample').addEventListener('click', async () => {
+      const base = Date.now();
+      const words = sampleWords(getLang()).map((item, i) => {
+        const w = S.makeWord({ ...item, tags: [t('home.sampleTag')] });
+        w.createdAt = base + i;
+        return w;
+      });
+      await S.addWords(words);
+      route();
+      toast(t('home.sampleAdded', { n: words.length }), 5000);
+    });
     return;
   }
 
@@ -370,7 +442,7 @@ function homeView() {
       location.hash = '#add';
       return;
     }
-    const w = S.makeWord({ ...item, source: 'daily' });
+    const w = S.makeWord(item);
     await S.addWords([w]);
     route();
     $('#qa')?.focus();
@@ -395,7 +467,9 @@ function sessionView({ types, mode }) {
 
   function remaining() {
     const c = S.todayCounts();
-    return types.reduce((s, ty) => s + c.due[ty] + c.newLeft[ty], 0);
+    const left = types.reduce((sum, ty) => sum + c.answersLeft[ty], 0);
+    // Article cards unlocked by today's new nouns only show up in the full session.
+    return types.includes('meaning') ? left + c.upcomingAnswers : left;
   }
 
   function progress() {
@@ -412,6 +486,9 @@ function sessionView({ types, mode }) {
   }
 
   function shell(inner, actions, meta = '') {
+    // Each card installs its own shortcuts; drop the previous card's so a stray key can't
+    // rate a word that is no longer on screen.
+    keyHandler = null;
     const { total, pct } = progress();
     $app.innerHTML = `
       <div class="study">
@@ -497,7 +574,11 @@ function sessionView({ types, mode }) {
         <div class="answer" id="answer" hidden>
           ${extra ? `<div class="sub">${extra}</div>` : ''}
           <div class="zh">${esc(w.zh) || `<span class="tertiary">${t('card.noMeaning')}</span>`}</div>
-          ${w.example ? `<div class="example"><div lang="de">${esc(w.example)}</div>${w.exampleZh ? `<div class="secondary">${esc(w.exampleZh)}</div>` : ''}</div>` : ''}
+          ${
+            w.example
+              ? `<div class="example"><button class="say-example" id="sayExample" lang="de" aria-label="${t('listen')}">${ttsAvailable() ? `${ICON.speaker} ` : ''}${esc(w.example)}</button>${w.exampleZh ? `<div class="secondary">${esc(w.exampleZh)}</div>` : ''}</div>`
+              : ''
+          }
           ${w.notes ? `<div class="notes">${esc(w.notes)}</div>` : ''}
           <a class="edit-link" href="${wordLink(w)}">${ICON.edit} ${t('edit')}</a>
         </div>
@@ -512,6 +593,11 @@ function sessionView({ types, mode }) {
     });
     if (state.settings.autoSpeak) say();
 
+    $('#sayExample')?.addEventListener('click', (e) => {
+      if (!revealed) return;
+      e.stopPropagation();
+      speak(w.example);
+    });
     const reveal = () => {
       if (revealed) return;
       revealed = true;
@@ -806,20 +892,35 @@ function sessionView({ types, mode }) {
 }
 
 function wordsView() {
-  setNav({ title: t('tab.words') });
   let q = '';
-  let source = local.get('wordsSource', 'all');
+  const tags = S.allTags();
+  let tag = local.get('wordsTag', 'all');
+  if (tag !== 'all' && !tags.includes(tag)) tag = 'all';
   let status = local.get('wordsStatus', 'all');
   let limit = 150;
+  let list = [];
+  let selecting = false;
+  const selected = new Set();
+
+  const setWordsNav = () =>
+    setNav({
+      title: t('tab.words'),
+      extra: `<button class="nav-pill glass" id="selectBtn">${selecting ? t('words.done') : t('words.select')}</button>`,
+    });
+  setWordsNav();
 
   $app.innerHTML = `
     ${largeTitle(t('tab.words'))}
     <div class="search">${ICON.search}<input id="search" type="search" placeholder="${esc(t('words.search'))}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
     <div class="menus">
-      <select id="fSource" class="menu">
-        <option value="all">${t('words.allSources')}</option>
-        ${S.SOURCES.map((k) => `<option value="${k}">${t(`src.${k}`)}</option>`).join('')}
-      </select>
+      ${
+        tags.length
+          ? `<select id="fTag" class="menu">
+              <option value="all">${t('words.allTags')}</option>
+              ${tags.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}
+            </select>`
+          : ''
+      }
       <select id="fStatus" class="menu">
         <option value="all">${t('words.allStatus')}</option>
         ${S.STATUSES.map((k) => `<option value="${k}">${t(`st.${k}`)}</option>`).join('')}
@@ -830,16 +931,23 @@ function wordsView() {
     <section class="section">
       <div class="section-header" id="count"></div>
       <div class="list" id="list"></div>
-    </section>`;
-  $('#fSource').value = source;
+    </section>
+    <div class="select-bar glass" id="selectBar" hidden>
+      <button class="sel-text" id="selAll"></button>
+      <span class="sel-count" id="selCount"></span>
+      <button class="sel-icon" id="selTag" aria-label="${t('words.addTag')}">${ICON.tag}</button>
+      <button class="sel-icon" id="selSuspend"></button>
+      <button class="sel-icon danger" id="selDelete" aria-label="${t('words.delete')}">${ICON.trash}</button>
+    </div>`;
+  if ($('#fTag')) $('#fTag').value = tag;
   $('#fStatus').value = status;
 
   const incomplete = (w) => !w.zh || (w.pos === 'noun' && (!w.article || !w.plural));
 
-  function render() {
+  function filter() {
     const ql = q.toLowerCase();
-    const list = S.liveWords().filter((w) => {
-      if (source !== 'all' && w.source !== source) return false;
+    list = S.liveWords().filter((w) => {
+      if (tag !== 'all' && !(w.tags || []).includes(tag)) return false;
       if (status === 'hardArticle') {
         if (!(w.cards.article?.lapses >= 1)) return false;
       } else if (status === 'incomplete') {
@@ -849,12 +957,16 @@ function wordsView() {
       return (
         w.lemma.toLowerCase().includes(ql) ||
         (w.zh || '').toLowerCase().includes(ql) ||
-        (w.tags || []).some((tag) => tag.toLowerCase().includes(ql)) ||
+        (w.tags || []).some((x) => x.toLowerCase().includes(ql)) ||
         (w.plural || '').toLowerCase().includes(ql)
       );
     });
     if (status === 'hardArticle') list.sort((a, b) => b.cards.article.lapses - a.cards.article.lapses);
     else list.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  function render() {
+    filter();
     $('#count').textContent = t('n.words', { n: list.length });
     const box = $('#list');
     box.hidden = !list.length;
@@ -864,12 +976,16 @@ function wordsView() {
         .map((w) => {
           const st = S.wordStatus(w);
           const pl = w.plural && w.plural !== NO_PLURAL ? `<span class="secondary t-sub"> · ${esc(w.plural)}</span>` : '';
-          return row({
-            title: `<span class="wr-de" lang="de">${wordHTML(w)}${pl}</span>`,
-            sub: esc(shortMeaning(w.zh)) || `<span class="warn-text">${t('words.noMeaning')}</span>`,
-            detail: `<span class="status s-${st}">${t(`st.${st}`)}</span>`,
-            href: wordLink(w),
-          });
+          const title = `<span class="wr-de" lang="de">${wordHTML(w)}${pl}</span>`;
+          const sub = esc(shortMeaning(w.zh)) || `<span class="warn-text">${t('words.noMeaning')}</span>`;
+          const detail = `<span class="status s-${st}">${t(`st.${st}`)}</span>`;
+          if (!selecting) return row({ title, sub, detail, href: wordLink(w) });
+          const on = selected.has(w.id);
+          return `<button class="row pick ${on ? 'on' : ''}" data-id="${esc(w.id)}" aria-pressed="${on}">
+            <span class="check">${ICON.check}</span>
+            <div class="row-main"><div class="row-title">${title}</div><div class="row-sub">${sub}</div></div>
+            <div class="row-detail">${detail}</div>
+          </button>`;
         })
         .join('') +
       (list.length > limit
@@ -881,15 +997,95 @@ function wordsView() {
       limit += 150;
       render();
     });
+    renderBar();
   }
+
+  const selectedWords = () => [...selected].map((id) => state.words.get(id)).filter((w) => w && !w.deleted);
+
+  function renderBar() {
+    const bar = $('#selectBar');
+    bar.hidden = !selecting;
+    document.body.classList.toggle('selecting', selecting);
+    if (!selecting) return;
+    const chosen = selectedWords();
+    const allOn = list.length > 0 && list.every((w) => selected.has(w.id));
+    const allSuspended = chosen.length > 0 && chosen.every((w) => w.suspended);
+    $('#selAll').textContent = allOn ? t('words.selectNone') : t('words.selectAll');
+    $('#selCount').textContent = t('words.selected', { n: chosen.length });
+    const sus = $('#selSuspend');
+    sus.innerHTML = allSuspended ? ICON.play : ICON.pause;
+    sus.setAttribute('aria-label', allSuspended ? t('words.resume') : t('words.suspend'));
+    for (const id of ['selTag', 'selSuspend', 'selDelete']) $(`#${id}`).disabled = !chosen.length;
+  }
+
+  function setSelecting(on) {
+    selecting = on;
+    selected.clear();
+    setWordsNav();
+    bindSelectBtn();
+    render();
+  }
+  function bindSelectBtn() {
+    document.getElementById('selectBtn').addEventListener('click', () => setSelecting(!selecting));
+  }
+  bindSelectBtn();
+
+  $('#list').addEventListener('click', (e) => {
+    const b = e.target.closest('.pick');
+    if (!b) return;
+    const id = b.dataset.id;
+    selected.has(id) ? selected.delete(id) : selected.add(id);
+    b.classList.toggle('on', selected.has(id));
+    b.setAttribute('aria-pressed', selected.has(id));
+    renderBar();
+  });
+  // "Select all" applies to the current search and filters, so a whole tag can be handled at once.
+  $('#selAll').addEventListener('click', () => {
+    const allOn = list.every((w) => selected.has(w.id));
+    for (const w of list) allOn ? selected.delete(w.id) : selected.add(w.id);
+    render();
+  });
+  $('#selTag').addEventListener('click', async () => {
+    const input = await dialog({
+      message: t('words.addTagPrompt'),
+      confirm: t('dlg.add'),
+      input: { placeholder: t('add.tagsPh') },
+    });
+    const add = (input || '').split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+    if (!add.length) return;
+    await S.updateWords(selectedWords(), (w) => (w.tags = [...new Set([...(w.tags || []), ...add])]));
+    toast(t('words.tagged', { n: selected.size }));
+    route();
+  });
+  $('#selSuspend').addEventListener('click', async () => {
+    const chosen = selectedWords();
+    const resume = chosen.every((w) => w.suspended);
+    await S.updateWords(chosen, (w) => (w.suspended = !resume));
+    toast(t(resume ? 'words.resumedN' : 'words.suspendedN', { n: chosen.length }));
+    render();
+  });
+  $('#selDelete').addEventListener('click', async () => {
+    const chosen = selectedWords();
+    if (!(await dialog({ message: t('words.confirmDelete', { n: chosen.length }), confirm: t('words.delete'), destructive: true }))) return;
+    await S.updateWords(chosen, (w) => (w.deleted = true));
+    setSelecting(false);
+    toast(t('words.deletedN', { n: chosen.length }), {
+      action: t('study.undo'),
+      onAction: async () => {
+        await S.updateWords(chosen, (w) => (w.deleted = false));
+        if (current === 'words') route();
+      },
+    });
+  });
+
   $('#search').addEventListener('input', (e) => {
     q = e.target.value.trim();
     limit = 150;
     render();
   });
-  $('#fSource').addEventListener('change', (e) => {
-    source = e.target.value;
-    local.set('wordsSource', source);
+  $('#fTag')?.addEventListener('change', (e) => {
+    tag = e.target.value;
+    local.set('wordsTag', tag);
     render();
   });
   $('#fStatus').addEventListener('change', (e) => {
@@ -898,10 +1094,24 @@ function wordsView() {
     render();
   });
   render();
+  refreshView = () => {
+    for (const id of selected) if (!state.words.get(id) || state.words.get(id).deleted) selected.delete(id);
+    // Another device may have added tags; keep the menu current without leaving the page.
+    const menu = $('#fTag');
+    const fresh = S.allTags();
+    if (menu && fresh.join('\n') !== tags.join('\n')) {
+      tags.splice(0, tags.length, ...fresh);
+      if (tag !== 'all' && !tags.includes(tag)) tag = 'all';
+      menu.innerHTML = `<option value="all">${t('words.allTags')}</option>${tags.map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}`;
+      menu.value = tag;
+    }
+    render();
+  };
+  return () => document.body.classList.remove('selecting');
 }
 
 function editView(id) {
-  const w = state.words.get(id);
+  let w = state.words.get(id);
   const back = { href: '#words', label: t('tab.words') };
   if (!w || w.deleted) {
     setNav({ title: '', back, large: false });
@@ -949,10 +1159,8 @@ function editView(id) {
         </div>
       </section>
       <section class="section">
-        <div class="section-header">${t('edit.category')}</div>
         <div class="list">
-          <label class="row field"><span>${t('edit.source')}</span><select name="source">${options(S.SOURCES, 'src', w.source)}</select>${ICON.chev}</label>
-          <label class="row field"><span>${t('edit.tags')}</span><input name="tags" value="${esc((w.tags || []).join(', '))}" placeholder="${esc(t('edit.tagsPh'))}"></label>
+          <label class="row field"><span>${t('edit.tags')}</span><input name="tags" value="${esc((w.tags || []).join(', '))}" placeholder="${esc(t('edit.tagsPh'))}" autocomplete="off"></label>
         </div>
       </section>
     </form>
@@ -999,6 +1207,8 @@ function editView(id) {
     timer = null;
     const f = Object.fromEntries(new FormData(form));
     if (!f.lemma.trim()) return;
+    // Write onto the latest copy so review progress synced meanwhile is kept.
+    w = state.words.get(w.id) || w;
     Object.assign(w, {
       article,
       lemma: f.lemma.trim(),
@@ -1009,7 +1219,6 @@ function editView(id) {
       example: f.example.trim(),
       exampleZh: f.exampleZh.trim(),
       notes: f.notes.trim(),
-      source: f.source,
       tags: f.tags
         .split(/[,，]/)
         .map((tag) => tag.trim())
@@ -1024,18 +1233,19 @@ function editView(id) {
   });
   $('#suspend').addEventListener('click', async () => {
     flush();
+    w = state.words.get(w.id) || w;
     w.suspended = !w.suspended;
     await S.saveWord(w);
     toast(w.suspended ? t('edit.suspended') : t('edit.resumed'));
     route();
   });
   $('#reset').addEventListener('click', async () => {
-    if (!confirm(t('edit.confirmReset'))) return;
+    if (!(await dialog({ message: t('edit.confirmReset'), confirm: t('dlg.reset'), destructive: true }))) return;
     await S.resetProgress(w);
     route();
   });
   $('#del').addEventListener('click', async () => {
-    if (!confirm(t('edit.confirmDelete', { w: displayWord(w) }))) return;
+    if (!(await dialog({ message: t('edit.confirmDelete', { w: displayWord(w) }), confirm: t('words.delete'), destructive: true }))) return;
     clearTimeout(timer);
     timer = null;
     await S.deleteWord(w);
@@ -1051,32 +1261,51 @@ function addView() {
   // Meanings and articles typed into the preview, keyed by the source line, so they
   // survive re-parsing while the list is still being edited.
   const fills = new Map();
-  const src = pendingAdd ? 'daily' : local.get('addSource', 'exam');
-  const tags = pendingAdd ? '' : local.get('addTags', '');
+  const knownTags = S.allTags().slice(0, 12);
   $app.innerHTML = `
     ${largeTitle(t('add.title'))}
-    <div class="segmented" id="seg">
-      ${S.SOURCES.map((k) => `<button type="button" data-v="${k}" class="${k === src ? 'on' : ''}">${t(`src.${k}`)}</button>`).join('')}
-    </div>
     <section class="section">
       <div class="list">
-        <label class="row field"><span>${t('edit.tags')}</span><input id="tags" value="${esc(tags)}" placeholder="${esc(t('add.tagsPh'))}"></label>
         <div class="row">
           <textarea class="bare" id="lines" rows="7" lang="de" autocapitalize="off" autocorrect="off" spellcheck="false" style="min-height:9em" placeholder="${esc(t('add.ph'))}"></textarea>
         </div>
       </div>
       <div class="section-footer">${esc(t('add.foot'))}</div>
     </section>
+    <section class="section">
+      <div class="list">
+        <label class="row field"><span>${t('edit.tags')}</span><input id="tags" placeholder="${esc(t('add.tagsPh'))}" autocomplete="off"></label>
+        ${
+          knownTags.length
+            ? `<div class="row tag-chips">${knownTags.map((tag) => `<button type="button" class="chip" data-tag="${esc(tag)}">${esc(tag)}</button>`).join('')}</div>`
+            : ''
+        }
+      </div>
+      <div class="section-footer">${t('add.tagsFoot')}</div>
+    </section>
     <div id="preview"></div>`;
 
   const lines = $('#lines');
-  $('#seg').addEventListener('click', (e) => {
-    const b = e.target.closest('button');
-    if (!b) return;
-    $$('#seg button').forEach((x) => x.classList.toggle('on', x === b));
-    local.set('addSource', b.dataset.v);
-  });
-  const getSource = () => $('#seg .on')?.dataset.v || 'daily';
+  const tagsInput = $('#tags');
+  const tagList = () =>
+    tagsInput.value
+      .split(/[,，]/)
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  const syncChips = () => {
+    const current = tagList();
+    $$('.tag-chips .chip').forEach((c) => c.classList.toggle('on', current.includes(c.dataset.tag)));
+  };
+  // Tapping a used tag toggles it in the field.
+  $$('.tag-chips .chip').forEach((c) =>
+    c.addEventListener('click', () => {
+      const current = tagList();
+      const next = current.includes(c.dataset.tag) ? current.filter((x) => x !== c.dataset.tag) : [...current, c.dataset.tag];
+      tagsInput.value = next.join(', ');
+      syncChips();
+    }),
+  );
+  tagsInput.addEventListener('input', syncChips);
 
   function parse() {
     items = lines.value.split(/\r?\n/).map(parseLine).filter(Boolean);
@@ -1177,13 +1406,8 @@ function addView() {
   }
 
   async function doImport() {
-    const source = getSource();
-    const tagList = $('#tags')
-      .value.split(/[,，]/)
-      .map((tag) => tag.trim())
-      .filter(Boolean);
-    local.set('addTags', $('#tags').value);
-    const words = items.filter((i) => !i.dup).map((i) => S.makeWord({ ...i, source, tags: tagList }));
+    const tags = tagList();
+    const words = items.filter((i) => !i.dup).map((i) => S.makeWord({ ...i, tags }));
     // keep the pasted order
     const base = Date.now();
     words.forEach((w, i) => (w.createdAt = base + i));
@@ -1326,6 +1550,7 @@ function settingsView() {
   setNav({ title: t('tab.settings') });
   const s = state.settings;
   const langPref = local.get('lang', 'auto');
+  const syncOn = Boolean(sync.token) || local.get('syncOn', false);
   const standalone = window.navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   const langNames = { zh: '中文', en: 'English' };
   $app.innerHTML = `
@@ -1370,15 +1595,20 @@ function settingsView() {
     <section class="section">
       <div class="section-header">${t('set.sync')}</div>
       <div class="list">
-        <div id="syncInfo">${syncStatusHTML()}</div>
+        <label class="row has-icon">${icon('cloud', 'blue')}<div class="row-main">${t('set.syncSwitch')}</div><input type="checkbox" class="switch" id="syncSwitch" ${syncOn ? 'checked' : ''}></label>
+        ${
+          syncOn
+            ? `${sync.token ? `<div id="syncInfo">${syncStatusHTML()}</div>` : ''}
         <form id="tokenForm" class="row has-icon">${icon('key', 'gray')}
           <input class="bare" type="password" id="token" placeholder="${esc(t('set.tokenPh'))}" value="${esc(sync.token)}" autocomplete="off" enterkeyhint="go">
           <button class="btn small" id="tokenBtn"></button>
         </form>
         ${sync.token ? `<button class="row action" id="syncNow">${t('set.syncNow')}</button>` : ''}
-        ${sync.token && navigator.clipboard ? `<button class="row action" id="copyToken">${t('set.copyToken')}</button>` : ''}
+        ${sync.token && navigator.clipboard ? `<button class="row action" id="copyToken">${t('set.copyToken')}</button>` : ''}`
+            : ''
+        }
       </div>
-      <div class="section-footer">${t('set.syncFoot')}</div>
+      <div class="section-footer">${syncOn ? t('set.syncFoot') : t('set.syncOffFoot')}</div>
     </section>
 
     ${standalone ? '' : installSectionHTML()}
@@ -1425,18 +1655,35 @@ function settingsView() {
     route();
   });
 
+  $('#syncSwitch').addEventListener('change', async (e) => {
+    if (e.target.checked) {
+      local.set('syncOn', true);
+      route();
+      $('#token')?.focus();
+      return;
+    }
+    if (sync.token && !(await dialog({ message: t('set.confirmSyncOff'), confirm: t('dlg.turnOff') }))) {
+      e.target.checked = true;
+      return;
+    }
+    local.set('syncOn', false);
+    if (sync.token) await setToken('');
+    route();
+  });
+
   // With an empty field the button pastes from the clipboard, so moving the password to
   // another device is copy on one, paste on the other.
   const tokenInput = $('#token');
   const tokenBtn = $('#tokenBtn');
   const canPaste = Boolean(navigator.clipboard?.readText);
   const updateTokenBtn = () => {
+    if (!tokenInput) return;
     const v = tokenInput.value.trim();
     tokenBtn.textContent = !v && canPaste ? t('set.paste') : sync.token ? t('set.update') : t('set.connect');
   };
   updateTokenBtn();
-  tokenInput.addEventListener('input', updateTokenBtn);
-  $('#tokenForm').addEventListener('submit', async (e) => {
+  tokenInput?.addEventListener('input', updateTokenBtn);
+  $('#tokenForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!tokenInput.value.trim() && canPaste) {
       try {
@@ -1478,9 +1725,9 @@ function settingsView() {
   );
   $('#exportCsv').addEventListener('click', () => {
     const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [['article', 'lemma', 'plural', 'pos', 'forms', 'meaning', 'example', 'example_translation', 'source', 'tags', 'status']];
+    const rows = [['article', 'lemma', 'plural', 'pos', 'forms', 'meaning', 'example', 'example_translation', 'tags', 'status']];
     for (const w of S.liveWords()) {
-      rows.push([w.article, w.lemma, w.plural, w.pos, w.forms, w.zh, w.example, w.exampleZh, w.source, (w.tags || []).join(';'), S.wordStatus(w)]);
+      rows.push([w.article, w.lemma, w.plural, w.pos, w.forms, w.zh, w.example, w.exampleZh, (w.tags || []).join(';'), S.wordStatus(w)]);
     }
     download(`vocab-de-${stamp}.csv`, '﻿' + rows.map((r) => r.map(cell).join(',')).join('\n'), 'text/csv');
   });
@@ -1495,7 +1742,8 @@ function settingsView() {
     }
   });
   $('#wipe').addEventListener('click', async () => {
-    if (!confirm(sync.token ? t('set.wipeSynced') : t('set.wipeLocal'))) return;
+    const message = sync.token ? t('set.wipeSynced') : t('set.wipeLocal');
+    if (!(await dialog({ message, confirm: t('dlg.erase'), destructive: true }))) return;
     await S.wipeLocal();
     location.reload();
   });
@@ -1503,16 +1751,24 @@ function settingsView() {
 
 async function boot() {
   applyLang();
+  // Opening IndexedDB waits silently while another tab holds it; say so instead of a blank page.
+  const slow = setTimeout(() => ($app.innerHTML = `<p class="empty">${esc(t('boot.dbSlow'))}</p>`), 4000);
   try {
     await S.load();
   } catch (err) {
     $app.innerHTML = `<p class="empty">${esc(t('boot.dbError', { e: err.message }))}</p>`;
     return;
+  } finally {
+    clearTimeout(slow);
   }
   await initSync();
   onSyncChange(renderSync);
+  // Data pulled from another device: refresh in place where the view supports it, and
+  // never re-render under someone who is typing.
   onRemoteChange(() => {
-    if (['home', 'words', 'stats'].includes(current)) route();
+    if (refreshView) return refreshView();
+    const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+    if (!typing && ['home', 'stats'].includes(current)) route();
   });
   renderSync();
   window.addEventListener('hashchange', route);

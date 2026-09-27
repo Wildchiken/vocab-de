@@ -16,7 +16,6 @@ test('every key used in the UI exists', () => {
   // keys built at runtime
   const dynamic = [
     ...['meaning', 'article', 'spell'].map((k) => `type.${k}`),
-    ...['exam', 'book', 'daily', 'other'].map((k) => `src.${k}`),
     ...['new', 'learning', 'young', 'mature', 'suspended'].map((k) => `st.${k}`),
     ...['noun', 'verb', 'adj', 'adv', 'prep', 'conj', 'phrase', 'other'].map((k) => `pos.${k}`),
     ...['off', 'idle', 'syncing', 'pending', 'error', 'offline'].map((k) => `sync.${k}`),

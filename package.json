@@ -9,9 +9,10 @@
     "start": "node scripts/build-sw.mjs && node server/node.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test --test-timeout=10000 test/*.test.mjs"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
     "wrangler": "^4.40.0"
   },
   "engines": {

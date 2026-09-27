@@ -13,7 +13,15 @@ function open() {
       if (!db.objectStoreNames.contains('logs')) db.createObjectStore('logs', { keyPath: 'id' });
       if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv', { keyPath: 'key' });
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Let another tab upgrade or delete the database instead of blocking it forever.
+      db.onversionchange = () => {
+        db.close();
+        dbp = undefined;
+      };
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
   });
   return dbp;

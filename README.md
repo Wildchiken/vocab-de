@@ -6,6 +6,9 @@ A German vocabulary trainer that runs in the browser. It works on phones, tablet
 
 ## Features
 
+- A 20-word A1 starter set to try before importing your own list
+- Tags and batch selection for organizing words, pausing/resuming review, and deleting entries
+
 - Three independently scheduled card types, available according to the word and your learning progress:
   - Meaning: see the German word, recall what it means, rate yourself
   - Article (nouns with a known article): see only the noun and pick der / die / das; graded automatically by correctness and speed

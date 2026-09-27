@@ -1,5 +1,5 @@
 import { idb } from './db.js';
-import { state, markSettingsClean, onChange } from './store.js';
+import { state, markSettingsClean, markAllDirty, onChange } from './store.js';
 
 const BATCH = 400;
 
@@ -78,6 +78,13 @@ export async function setToken(token) {
   token = token.trim();
   if (token) {
     await api('/api/ping', null, token);
+  }
+  // A different password may mean a different server: pull from the start and push
+  // everything, otherwise records synced to the old server would never reach the new one.
+  if (token && token !== sync.token) {
+    sync.cursor = 0;
+    await idb.setKV('cursor', 0);
+    await markAllDirty();
   }
   sync.token = token;
   await idb.setKV('token', token);
