@@ -2,10 +2,11 @@
   "name": "vocab-de",
   "version": "1.0.0",
   "private": true,
-  "description": "German vocabulary trainer with FSRS spaced repetition and article drills, synced across Safari on iPhone, iPad and Mac",
+  "description": "German vocabulary trainer for modern browsers: FSRS review, article drills, offline study, and optional sync via Node.js/SQLite or Cloudflare D1.",
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "start": "node scripts/build-sw.mjs && node server/node.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "node --test test/*.test.mjs"
@@ -14,6 +15,6 @@
     "wrangler": "^4.40.0"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   }
 }

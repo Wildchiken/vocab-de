@@ -1,5 +1,4 @@
-// Uses the German voices built into the OS. Enhanced/Premium voices can be downloaded under
-// Settings > Accessibility > Spoken Content > Voices and are picked automatically.
+// Uses German voices exposed by the browser. Availability and offline support depend on the system.
 let voice = null;
 
 function pickVoice() {

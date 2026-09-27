@@ -1289,6 +1289,29 @@ function syncStatusHTML() {
   });
 }
 
+// Chromium browsers offer a real install prompt; elsewhere we show where to find it.
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+});
+
+function installSectionHTML() {
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const macSafari = !ios && /Macintosh/.test(ua) && /Safari/.test(ua) && !/Chrome|Chromium|Edg|Firefox/.test(ua);
+  let rows;
+  if (installPrompt) rows = `<button class="row action" id="installApp">${t('set.install')}</button>`;
+  else if (ios) rows = row({ title: 'iPhone / iPad', sub: t('set.homeIos') });
+  else if (macSafari) rows = row({ title: 'Mac', sub: t('set.homeMac') });
+  else rows = row({ title: t('set.homeOther') });
+  return `<section class="section">
+      <div class="section-header">${t('set.homeScreen')}</div>
+      <div class="list">${rows}</div>
+      <div class="section-footer">${ios || macSafari ? t('set.homeFootApple') : t('set.homeFoot')}</div>
+    </section>`;
+}
+
 function stepperRow(name, label, value, ic, { min = 0, max = 300, step = 5 } = {}) {
   return `<div class="row has-icon">${ic}
     <div class="row-main"><div class="row-title">${label}</div></div>
@@ -1358,18 +1381,7 @@ function settingsView() {
       <div class="section-footer">${t('set.syncFoot')}</div>
     </section>
 
-    ${
-      standalone
-        ? ''
-        : `<section class="section">
-      <div class="section-header">${t('set.homeScreen')}</div>
-      <div class="list">
-        ${row({ title: 'iPhone / iPad', sub: t('set.homeIos') })}
-        ${row({ title: 'Mac', sub: t('set.homeMac') })}
-      </div>
-      <div class="section-footer">${t('set.homeFoot')}</div>
-    </section>`
-    }
+    ${standalone ? '' : installSectionHTML()}
 
     <section class="section">
       <div class="section-header">${t('set.data')}</div>
@@ -1397,6 +1409,12 @@ function settingsView() {
       saveTimer = setTimeout(() => S.saveSettings({ [name]: v }), 400);
     }),
   );
+  $('#installApp')?.addEventListener('click', async () => {
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    route();
+  });
   $('#retention').addEventListener('change', (e) => S.saveSettings({ retention: +e.target.value }));
   $('#spell').addEventListener('change', (e) => S.saveSettings({ spell: e.target.checked }));
   $('#autoSpeak').addEventListener('change', (e) => S.saveSettings({ autoSpeak: e.target.checked }));

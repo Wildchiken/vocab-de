@@ -1,31 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
 import { timingSafeEqual } from 'node:crypto';
 import worker from '../src/worker.js';
+import { openD1 } from '../server/d1-sqlite.mjs';
 
 // Workers-only API
 crypto.subtle.timingSafeEqual ??= (a, b) => timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
-// Minimal D1 stand-in backed by node:sqlite
-function fakeD1() {
-  const db = new DatabaseSync(':memory:');
-  const stmt = (sql, args = []) => ({
-    bind: (...a) => stmt(sql, a),
-    all: async () => ({ results: db.prepare(sql).all(...args) }),
-    run: async () => db.prepare(sql).run(...args),
-  });
-  return {
-    prepare: (sql) => stmt(sql),
-    batch: async (list) => {
-      db.exec('BEGIN');
-      for (const s of list) await s.run();
-      db.exec('COMMIT');
-    },
-  };
-}
-
-const env = { SYNC_TOKEN: 'secret', DB: fakeD1() };
+const env = { SYNC_TOKEN: 'secret', DB: openD1(':memory:') };
 const call = (path, body, token = 'secret') =>
   worker.fetch(
     new Request(`https://x${path}`, {
