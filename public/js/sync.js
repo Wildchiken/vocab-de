@@ -8,7 +8,7 @@ export const sync = {
   cursor: 0,
   lastSync: 0,
   status: 'off', // off | idle | syncing | pending | error | offline
-  error: '',
+  error: '', // token | server | network
 };
 
 const listeners = new Set();
@@ -31,6 +31,7 @@ export async function initSync() {
     schedule(4000);
   });
   window.addEventListener('online', () => schedule(500));
+  window.addEventListener('offline', () => sync.token && setStatus('offline'));
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') schedule(300);
     else if (hasPending()) syncNow();
@@ -40,6 +41,7 @@ export async function initSync() {
 }
 
 let timer = null;
+let failures = 0;
 function schedule(ms) {
   clearTimeout(timer);
   timer = setTimeout(syncNow, ms);
@@ -51,18 +53,23 @@ function hasPending() {
   return state.logs.some((l) => !l.synced);
 }
 
+// Errors carry a code (token | server | network) that the UI translates.
 async function api(path, body, token = sync.token) {
-  const res = await fetch(path, {
-    method: body ? 'POST' : 'GET',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-    keepalive: Boolean(body) && JSON.stringify(body).length < 60_000,
-  });
+  let res;
+  try {
+    res = await fetch(path, {
+      method: body ? 'POST' : 'GET',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+      keepalive: Boolean(body) && JSON.stringify(body).length < 60_000,
+    });
+  } catch {
+    throw Object.assign(new Error('network error'), { code: 'network' });
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const err = new Error(res.status === 401 ? '同步口令不对' : data.error || `服务器错误 ${res.status}`);
-    err.status = res.status;
-    throw err;
+    const code = res.status === 401 ? 'token' : 'server';
+    throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { code, status: res.status });
   }
   return data;
 }
@@ -177,10 +184,13 @@ export function syncNow() {
       }
       sync.lastSync = Date.now();
       await idb.setKV('lastSync', sync.lastSync);
+      failures = 0;
       setStatus(hasPending() ? 'pending' : 'idle');
       if (changed) emitRemote();
     } catch (err) {
-      setStatus(navigator.onLine ? 'error' : 'offline', err.message);
+      setStatus(navigator.onLine ? 'error' : 'offline', err.code || 'server');
+      // A wrong password won't fix itself; anything else is retried with backoff.
+      if (err.code !== 'token') schedule(Math.min(10 * 60_000, 15_000 * 2 ** failures++));
     } finally {
       running = null;
     }
@@ -188,7 +198,7 @@ export function syncNow() {
   return running;
 }
 
-// 远端数据写入后通知界面刷新，但不要触发新一轮上传
+// Remote changes refresh the UI without marking anything dirty.
 const remoteListeners = new Set();
 export const onRemoteChange = (fn) => remoteListeners.add(fn);
 function emitRemote() {

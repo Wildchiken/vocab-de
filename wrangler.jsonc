@@ -3,7 +3,7 @@
   "name": "vocab-de",
   "main": "src/worker.js",
   "compatibility_date": "2026-09-01",
-  "compatibility_flags": ["nodejs_compat"],
+  "build": { "command": "node scripts/build-sw.mjs" },
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
@@ -13,9 +13,9 @@
     {
       "binding": "DB",
       "database_name": "vocab-de",
-      // 部署前运行 `npx wrangler d1 create vocab-de`，把输出的 database_id 填到这里
+      // from `npx wrangler d1 create vocab-de`
       "database_id": "00000000-0000-0000-0000-000000000000"
     }
   ]
-  // 同步口令用命令设置，不要写在这里：npx wrangler secret put SYNC_TOKEN
+  // secrets: npx wrangler secret put SYNC_TOKEN
 }

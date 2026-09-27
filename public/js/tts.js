@@ -1,4 +1,5 @@
-// Safari 自带德语语音。iOS 设置 > 辅助功能 > 朗读内容 > 声音 里可以下载更自然的"增强/高级"版本
+// Uses the German voices built into the OS. Enhanced/Premium voices can be downloaded under
+// Settings > Accessibility > Spoken Content > Voices and are picked automatically.
 let voice = null;
 
 function pickVoice() {

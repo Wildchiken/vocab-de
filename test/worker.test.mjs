@@ -4,10 +4,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { timingSafeEqual } from 'node:crypto';
 import worker from '../src/worker.js';
 
-// Workers 专有的 API，Node 里补一下
+// Workers-only API
 crypto.subtle.timingSafeEqual ??= (a, b) => timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
-// 用 node:sqlite 模拟 D1 的最小接口
+// Minimal D1 stand-in backed by node:sqlite
 function fakeD1() {
   const db = new DatabaseSync(':memory:');
   const stmt = (sql, args = []) => ({
@@ -56,11 +56,11 @@ test('last write wins and cursor pulls only newer rows', async () => {
   assert.equal(res.rows.length, 1);
   const cursor = res.cursor;
 
-  // 旧的改动不能覆盖新的
+  // an older write must not override a newer one
   res = await (await call('/api/sync', { since: cursor, changes: [w(50, 'old')] })).json();
   assert.equal(res.rows.length, 0);
 
-  // 新的改动会覆盖，并且在游标之后能拉到
+  // a newer write wins and shows up after the cursor
   res = await (await call('/api/sync', { since: cursor, changes: [w(200, 'B')] })).json();
   assert.equal(res.rows.length, 1);
   assert.equal(res.rows[0].data.zh, 'B');

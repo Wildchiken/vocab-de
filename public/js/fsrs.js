@@ -1,6 +1,5 @@
-// FSRS-4.5 间隔重复调度。公式见
-// https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm
-// 学习阶段（新卡 / 遗忘后重学）用分钟级短步长，毕业后按记忆稳定性 S 排天数。
+// FSRS-4.5 scheduler, see https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm
+// New and lapsed cards go through short learning steps (minutes) before being scheduled in days.
 
 export const DEFAULT_W = [
   0.4872, 1.4003, 3.7145, 13.8206, 5.1618, 1.2298, 0.8975, 0.031, 1.6474,
@@ -11,7 +10,7 @@ const DECAY = -0.5;
 const FACTOR = 19 / 81;
 export const MIN = 60_000;
 export const DAY = 86_400_000;
-const ROLLOVER_H = 4; // 凌晨 4 点换日，熬夜复习不会算到第二天
+const ROLLOVER_H = 4; // the day starts at 4 am, so late-night reviews count for the same day
 
 export const DEFAULT_PARAMS = {
   w: DEFAULT_W,
@@ -120,7 +119,7 @@ function rawAll(card, now, p) {
   const res = {};
   for (const g of [1, 2, 3, 4]) res[g] = core(card, g, now, p);
   const rv = (g) => res[g].state === 'review';
-  // 保证 困难 < 良好 < 简单
+  // keep Hard < Good < Easy
   if (rv(2) && rv(3) && res[3].ivl <= res[2].ivl) res[3].ivl = res[2].ivl + 1;
   if (rv(3) && rv(4) && res[4].ivl <= res[3].ivl) res[4].ivl = res[3].ivl + 1;
   return res;
@@ -133,7 +132,6 @@ function finalize(c, now) {
 
 const withDefaults = (p) => ({ ...DEFAULT_PARAMS, ...p });
 
-/** 四个评分各自的结果，用于按钮上显示下次间隔 */
 export function previewAll(card, now, params) {
   const p = withDefaults(params);
   const res = rawAll(card, now, p);
@@ -148,15 +146,4 @@ export function schedule(card, g, now, params, rand = Math.random) {
     c.ivl = Math.min(p.maxIvl, Math.max(2, Math.round(c.ivl * (0.95 + rand() * 0.1))));
   }
   return finalize(c, now);
-}
-
-export function formatIvl(ms) {
-  const m = ms / MIN;
-  if (m < 60) return `${Math.max(1, Math.round(m))}分钟`;
-  const h = m / 60;
-  if (h < 20) return `${Math.round(h)}小时`;
-  const d = ms / DAY;
-  if (d < 30) return `${Math.round(d)}天`;
-  if (d < 365) return `${+(d / 30).toFixed(1)}个月`;
-  return `${+(d / 365).toFixed(1)}年`;
 }

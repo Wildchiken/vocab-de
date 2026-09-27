@@ -12,7 +12,8 @@ import {
   ARTICLES,
   NO_PLURAL,
 } from './german.js';
-import { formatIvl, dayStart, DAY } from './fsrs.js';
+import { dayStart, DAY } from './fsrs.js';
+import { t, fmtIvl, locale, detectLang, setLang, LANGS } from './i18n.js';
 import { speak, ttsAvailable } from './tts.js';
 
 const $app = document.getElementById('app');
@@ -22,16 +23,8 @@ const esc = (s) =>
 const $ = (sel, root = $app) => root.querySelector(sel);
 const $$ = (sel, root = $app) => [...root.querySelectorAll(sel)];
 
-const POS_LABEL = {
-  noun: '名词',
-  verb: '动词',
-  adj: '形容词',
-  adv: '副词',
-  prep: '介词',
-  conj: '连词',
-  phrase: '短语',
-  other: '其他',
-};
+const POS = ['noun', 'verb', 'adj', 'adv', 'prep', 'conj', 'phrase', 'other'];
+const posLabel = (p) => (POS.includes(p) ? t(`pos.${p}`) : '');
 
 const ICON = {
   speak:
@@ -53,12 +46,12 @@ const ICON = {
   target: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.5" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>',
   sparkle: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.8 5.4L19 10l-5.2 1.6L12 17l-1.8-5.4L5 10l5.2-1.6z" fill="currentColor"/></svg>',
   key: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 12h8M17 12v3M20 12v2.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
+  globe: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 12h16M12 4c2.5 2.5 2.5 13.5 0 16M12 4c-2.5 2.5-2.5 13.5 0 16" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>',
 };
 
 const stripesIcon = '<span class="ic stripes"><i style="background:#0a84ff"></i><i style="background:#ff453a"></i><i style="background:#30d158"></i></span>';
 const icon = (name, color) => `<span class="ic ${color}">${ICON[name]}</span>`;
 
-// 小工具
 function wordHTML(w) {
   if (w.pos === 'noun' && ARTICLES.includes(w.article)) {
     return `<span class="g g-${w.article}"><span class="art">${w.article}</span> <span class="lemma">${esc(w.lemma)}</span></span>`;
@@ -66,14 +59,31 @@ function wordHTML(w) {
   return `<span class="g"><span class="lemma">${esc(w.lemma)}</span></span>`;
 }
 
-const shortZh = (zh) => (zh || '').split(/[；;]/).slice(0, 2).join('；');
+const shortMeaning = (s) => (s || '').split(/[；;]/).slice(0, 2).join('；');
+const pluralLabel = (w) => {
+  const p = pluralText(w);
+  return p === NO_PLURAL ? t('add.noPlural') : p;
+};
+const wordLink = (w) => `#word/${encodeURIComponent(w.id)}`;
 
-function toast(msg, ms = 2200) {
+function toast(msg, opts = {}) {
+  const { ms = 2200, action, onAction } = typeof opts === 'number' ? { ms: opts } : opts;
   const el = document.getElementById('toast');
+  const hide = () => el.classList.remove('show');
   el.textContent = msg;
+  el.classList.toggle('has-action', Boolean(action));
+  if (action) {
+    const b = document.createElement('button');
+    b.textContent = action;
+    b.addEventListener('click', () => {
+      hide();
+      onAction();
+    });
+    el.append(b);
+  }
   el.classList.add('show');
   clearTimeout(toast.t);
-  toast.t = setTimeout(() => el.classList.remove('show'), ms);
+  toast.t = setTimeout(hide, action ? Math.max(ms, 4500) : ms);
 }
 
 const local = {
@@ -93,26 +103,25 @@ const local = {
 };
 
 function relTime(ts) {
-  if (!ts) return '从未';
+  if (!ts) return t('rel.never');
   const s = (Date.now() - ts) / 1000;
-  if (s < 60) return '刚刚';
-  if (s < 3600) return `${Math.round(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.round(s / 3600)} 小时前`;
-  return new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  if (s < 60) return t('rel.now');
+  if (s < 3600) return t('rel.min', { n: Math.round(s / 60) });
+  if (s < 86400) return t('rel.hour', { n: Math.round(s / 3600) });
+  return new Date(ts).toLocaleString(locale(), { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 function dueText(c) {
-  if (!c || c.state === 'new') return '未学';
+  if (!c || c.state === 'new') return t('due.new');
   const ms = c.due - Date.now();
-  if (ms <= 0) return '已到期';
+  if (ms <= 0) return t('due.now');
   if (c.state === 'review') {
     const days = Math.round((dayStart(c.due) - dayStart(Date.now())) / DAY);
-    return days <= 1 ? '明天' : `${days} 天后`;
+    return days <= 1 ? t('due.tomorrow') : t('due.days', { n: days });
   }
-  return `${formatIvl(ms)}后`;
+  return t('due.in', { t: fmtIvl(ms) });
 }
 
-// 分组列表的一行
 function row({ title, sub = '', detail = '', href, icon: ic = '', cls = '', attrs = '', chevron = Boolean(href) }) {
   const tag = href ? 'a' : 'div';
   return `<${tag} class="row ${ic ? 'has-icon' : ''} ${cls}" ${href ? `href="${href}"` : ''} ${attrs}>
@@ -126,21 +135,29 @@ function row({ title, sub = '', detail = '', href, icon: ic = '', cls = '', attr
 const largeTitle = (title, kicker = '') =>
   `<header class="large-title">${kicker ? `<span class="kicker">${kicker}</span>` : ''}<h1>${title}</h1></header>`;
 
-// 导航栏：大标题滚走后显示小标题
+function applyLang() {
+  setLang(detectLang(local.get('lang', 'auto')));
+  document.documentElement.lang = locale();
+  document.title = t('app.name');
+  document.querySelector('meta[name="apple-mobile-web-app-title"]')?.setAttribute('content', t('app.name'));
+  for (const el of document.querySelectorAll('[data-i18n]')) el.textContent = t(el.dataset.i18n);
+  for (const el of document.querySelectorAll('[data-i18n-label]')) el.setAttribute('aria-label', t(el.dataset.i18nLabel));
+}
+
+// The small nav title appears once the large title has scrolled away.
 function setNav({ title = '', back = null, extra = '', large = true } = {}) {
   document.getElementById('navTitle').textContent = title;
   document.getElementById('navLeft').innerHTML = back
-    ? `<a class="nav-back glass" href="${back.href}" aria-label="返回${esc(back.label)}">${ICON.back}<span>${esc(back.label)}</span></a>`
+    ? `<a class="nav-back glass" href="${back.href}" aria-label="${esc(t('back', { label: back.label }))}">${ICON.back}<span>${esc(back.label)}</span></a>`
     : '';
   document.getElementById('navExtra').innerHTML = extra;
   $nav.dataset.large = large ? '1' : '';
-  // 页面内容渲染后 route() 会再算一次；这里先按大标题可见处理，避免小标题闪一下
   $nav.classList.toggle('show-title', !large);
 }
 let lastY = 0;
 function onScroll() {
   const y = window.scrollY;
-  // 往下滚收起标签栏，往上滚展开
+  // collapse the tab bar while scrolling down, expand on the way back up
   if (y < 40 || y < lastY - 6) document.body.classList.remove('tab-min');
   else if (y > lastY + 6 && y > 80) document.body.classList.add('tab-min');
   if (Math.abs(y - lastY) > 6 || y < 40) lastY = y;
@@ -150,21 +167,19 @@ function onScroll() {
   $nav.classList.toggle('show-title', Boolean(showTitle));
 }
 window.addEventListener('scroll', onScroll, { passive: true });
-// 收起状态下点标签栏先展开
 document.querySelector('.tab-capsule').addEventListener('click', (e) => {
   if (!document.body.classList.contains('tab-min') || matchMedia('(min-width: 1000px)').matches) return;
   e.preventDefault();
   document.body.classList.remove('tab-min');
 });
 
-// 多行输入框随内容长高（Safari 还不支持 field-sizing）
-function autoGrow(t) {
-  t.style.height = 'auto';
-  t.style.height = `${t.scrollHeight}px`;
+// Safari has no field-sizing yet.
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = `${el.scrollHeight}px`;
 }
 document.addEventListener('input', (e) => e.target.matches?.('.field textarea') && autoGrow(e.target));
 
-// 键盘
 let keyHandler = null;
 document.addEventListener('keydown', (e) => {
   if (!keyHandler || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -173,7 +188,6 @@ document.addEventListener('keydown', (e) => {
   keyHandler(e);
 });
 
-// 路由
 let cleanup = null;
 let current = '';
 const routes = {
@@ -204,22 +218,34 @@ function route() {
   document.body.classList.remove('tab-min');
   cleanup = routes[current](arg ? decodeURIComponent(arg) : undefined) || null;
   onScroll();
+  if (!STUDY_VIEWS.includes(current)) {
+    $app.classList.remove('enter');
+    void $app.offsetWidth;
+    $app.classList.add('enter');
+  }
+  applyUpdateIfIdle();
 }
 
-// 同步状态
-const SYNC_LABEL = {
-  off: '未开启同步',
-  idle: '已同步',
-  syncing: '正在同步',
-  pending: '等待同步',
-  error: '同步失败',
-  offline: '离线',
-};
+// A new release is applied by reloading, but never in the middle of a session or while typing.
+const STUDY_VIEWS = ['study', 'article'];
+const SAFE_TO_RELOAD = ['home', 'words', 'stats', 'settings'];
+let updateReady = false;
+function applyUpdateIfIdle() {
+  if (!updateReady || !SAFE_TO_RELOAD.includes(current)) return;
+  try {
+    sessionStorage.setItem('vocab-de:updated', '1');
+  } catch {}
+  location.reload();
+}
+
+const syncError = () => t(`sync.err.${sync.error || 'server'}`);
+
 function renderSync() {
   const btn = document.getElementById('syncBtn');
+  const label = t(`sync.${sync.status}`);
   btn.dataset.status = sync.status;
-  btn.setAttribute('aria-label', SYNC_LABEL[sync.status]);
-  btn.title = sync.error || `${SYNC_LABEL[sync.status]} · 上次同步 ${relTime(sync.lastSync)}`;
+  btn.setAttribute('aria-label', label);
+  btn.title = sync.status === 'error' ? syncError() : `${label} · ${t('sync.last', { time: relTime(sync.lastSync) })}`;
   const info = document.getElementById('syncInfo');
   if (info) info.innerHTML = syncStatusHTML();
 }
@@ -229,41 +255,37 @@ document.getElementById('syncBtn').addEventListener('click', async () => {
     return;
   }
   await syncNow();
-  toast(sync.status === 'error' ? sync.error || '同步失败' : sync.status === 'offline' ? '离线，联网后自动同步' : '已同步');
+  toast(sync.status === 'error' ? syncError() : sync.status === 'offline' ? t('sync.offlineToast') : t('sync.idle'));
 });
 
-// 今天
 let pendingAdd = '';
 
 function todayKicker() {
-  return new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' });
+  return new Date().toLocaleDateString(locale(), { month: 'long', day: 'numeric', weekday: 'long' });
 }
 
 function homeView() {
-  setNav({ title: '今天' });
+  setNav({ title: t('tab.home') });
   const words = S.liveWords();
   if (!words.length) {
     $app.innerHTML = `
-      ${largeTitle('今天', todayKicker())}
+      ${largeTitle(t('tab.home'), todayKicker())}
       <section class="section welcome">
         <div class="summary done">
           <div class="done-circle" style="background:var(--tint)">${ICON.book}</div>
-          <h2>开始建你的词库</h2>
-          <p class="secondary t-sub">把考试词表、课本词汇或者平时遇到的生词贴进来，一行一个。</p>
+          <h2>${t('home.emptyTitle')}</h2>
+          <p class="secondary t-sub">${t('home.emptyBody')}</p>
         </div>
       </section>
       <section class="section">
-        <div class="section-header">支持的格式</div>
-        <div class="list"><pre class="sample">der Tisch, -e 桌子
-die Mutter, ¨ 母亲
-gehen, ging, ist gegangen 走
-Zeitung</pre></div>
-        <div class="section-footer">复数写成 -e、¨-er、- 都能识别。没写中文或冠词的，识别后可以直接补上。</div>
+        <div class="section-header">${t('home.formats')}</div>
+        <div class="list"><pre class="sample" lang="de">${esc(t('home.sample'))}</pre></div>
+        <div class="section-footer">${t('home.formatsFoot')}</div>
       </section>
-      <section class="section"><a class="btn" href="#add">导入单词</a></section>
+      <section class="section"><a class="btn" href="#add">${t('home.import')}</a></section>
       ${
         sync.status === 'off'
-          ? `<section class="section"><div class="list">${row({ title: '在 iPhone、iPad、Mac 之间同步', icon: icon('cloud', 'blue'), href: '#settings' })}</div></section>`
+          ? `<section class="section"><div class="list">${row({ title: t('home.syncPromo'), icon: icon('cloud', 'blue'), href: '#settings' })}</div></section>`
           : ''
       }`;
     return;
@@ -273,73 +295,98 @@ Zeitung</pre></div>
   const st = S.stats();
   const reviewTotal = c.due.meaning + c.due.article + c.due.spell;
   const artTotal = c.due.article + c.newLeft.article;
-  const parts = [];
-  if (c.due.meaning) parts.push(`释义 ${c.due.meaning}`);
-  if (c.due.article) parts.push(`冠词 ${c.due.article}`);
-  if (c.due.spell) parts.push(`拼写 ${c.due.spell}`);
+  const parts = S.CARD_TYPES.filter((ty) => c.due[ty]).map((ty) => `${t(`type.${ty}`)} ${c.due[ty]}`);
   const extraNew = c.newLeft.article + c.newLeft.spell;
-  if (extraNew) parts.push(`新冠词/拼写卡 ${extraNew}`);
+  if (extraNew) parts.push(t('home.extraNew', { n: extraNew }));
 
   $app.innerHTML = `
-    ${largeTitle('今天', todayKicker())}
+    ${largeTitle(t('tab.home'), todayKicker())}
     <section class="section">
       ${
         c.total
           ? `<div class="summary">
               <div class="summary-nums">
-                <div><div class="summary-label">待复习</div><div class="summary-num c-tint">${reviewTotal}</div></div>
-                <div><div class="summary-label">新词</div><div class="summary-num c-blue">${c.newLeft.meaning}</div></div>
+                <div><div class="summary-label">${t('home.due')}</div><div class="summary-num c-tint">${reviewTotal}</div></div>
+                <div><div class="summary-label">${t('home.new')}</div><div class="summary-num c-blue">${c.newLeft.meaning}</div></div>
               </div>
-              <p class="secondary t-sub">${parts.join(' · ') || '没有到期的复习'}</p>
-              <a class="btn" href="#study">开始学习<kbd>↵</kbd></a>
+              <p class="secondary t-sub">${parts.join(' · ') || t('home.nothingDue')}</p>
+              <a class="btn" href="#study">${t('home.start')}<kbd>↵</kbd></a>
             </div>`
           : `<div class="summary done">
               <div class="done-circle">${ICON.check}</div>
-              <h2>今天的任务完成了</h2>
-              <p class="secondary t-sub">明天预计复习 ${st.forecast[1]} 张</p>
+              <h2>${t('home.doneTitle')}</h2>
+              <p class="secondary t-sub">${t('home.tomorrow', { n: st.forecast[1] })}</p>
+              ${c.unseen ? `<button class="btn tinted more-new" id="moreNew">${t('home.moreNew', { n: Math.min(10, c.unseen) })}</button>` : ''}
             </div>`
       }
     </section>
 
     <section class="section">
       <div class="list">
-        ${row({ title: '冠词快练', sub: artTotal ? `${artTotal} 张到期或新卡` : '可以自由练习', icon: stripesIcon, href: '#article' })}
+        ${row({
+          title: t('home.articleDrill'),
+          sub: artTotal ? t('home.articleDue', { n: artTotal }) : t('home.articleFree'),
+          icon: stripesIcon,
+          href: '#article',
+        })}
       </div>
     </section>
 
     <section class="section">
-      <div class="section-header">遇到生词</div>
+      <div class="section-header">${t('home.quick')}</div>
       <form class="list quick-add" id="quickAdd">
         <div class="row">
-          <input class="bare" id="qa" placeholder="如 die Haltestelle 或 aufräumen" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" lang="de" enterkeyhint="done">
-          <button class="btn small">添加</button>
+          <input class="bare" id="qa" placeholder="${esc(t('home.quickPh'))}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" lang="de" enterkeyhint="done">
+          <button class="btn small">${t('home.add')}</button>
         </div>
       </form>
     </section>
 
     <section class="section">
-      <div class="section-header">概况</div>
+      <div class="section-header">${t('home.overview')}</div>
       <div class="list">
-        ${row({ title: '连续学习', icon: icon('flame', 'orange'), detail: `${st.streak} 天` })}
-        ${row({ title: '今日已做', icon: icon('check', 'green'), detail: `${st.todayReviews} 张` })}
-        ${row({ title: '已掌握', icon: icon('target', 'indigo'), detail: `${st.byStatus.mature} / ${st.total}`, href: '#stats' })}
+        ${row({ title: t('home.streak'), icon: icon('flame', 'orange'), detail: t('n.days', { n: st.streak }) })}
+        ${row({ title: t('home.reviewed'), icon: icon('check', 'green'), detail: t('n.cards', { n: st.todayReviews }) })}
+        ${row({ title: t('home.mastered'), icon: icon('target', 'indigo'), detail: `${st.byStatus.mature} / ${st.total}`, href: '#stats' })}
       </div>
     </section>`;
 
-  $('#quickAdd').addEventListener('submit', (e) => {
+  $('#moreNew')?.addEventListener('click', async () => {
+    await S.addExtraNew(Math.min(10, c.unseen));
+    location.hash = '#study';
+  });
+  // Complete entries are saved right here; anything missing goes to the import screen.
+  $('#quickAdd').addEventListener('submit', async (e) => {
     e.preventDefault();
     const v = $('#qa').value.trim();
-    if (!v) return;
-    pendingAdd = v;
-    local.set('addSource', 'daily');
-    location.hash = '#add';
+    const item = v && parseLine(v);
+    if (!item) return;
+    if (S.findDuplicate(item.lemma, item.article)) {
+      toast(t('home.exists', { w: displayWord(item) }));
+      return;
+    }
+    if (isIncomplete(item)) {
+      pendingAdd = v;
+      location.hash = '#add';
+      return;
+    }
+    const w = S.makeWord({ ...item, source: 'daily' });
+    await S.addWords([w]);
+    route();
+    $('#qa')?.focus();
+    toast(t('home.added', { w: displayWord(w) }), {
+      action: t('study.undo'),
+      onAction: async () => {
+        await S.deleteWord(w);
+        if (current === 'home') route();
+      },
+    });
   });
   keyHandler = (e) => {
     if (e.key === 'Enter' && c.total) location.hash = '#study';
   };
 }
 
-// 学习会话
 function sessionView({ types, mode }) {
   const session = { types, sinceNew: 0, lastWordId: null, done: 0, again: 0, undo: null };
   let alive = true;
@@ -348,22 +395,33 @@ function sessionView({ types, mode }) {
 
   function remaining() {
     const c = S.todayCounts();
-    return types.reduce((s, t) => s + c.due[t] + c.newLeft[t], 0);
+    return types.reduce((s, ty) => s + c.due[ty] + c.newLeft[ty], 0);
+  }
+
+  function progress() {
+    const total = session.done + remaining();
+    return { total, pct: total ? Math.round((session.done / total) * 100) : 100 };
+  }
+
+  function updateProgress() {
+    const { total, pct } = progress();
+    const fill = $('.progress-fill');
+    if (fill) fill.style.width = `${pct}%`;
+    const text = $('.progress-text');
+    if (text) text.textContent = `${session.done} / ${total}`;
   }
 
   function shell(inner, actions, meta = '') {
-    const left = remaining();
-    const total = session.done + left;
-    const pct = total ? Math.round((session.done / total) * 100) : 100;
+    const { total, pct } = progress();
     $app.innerHTML = `
       <div class="study">
         <div class="study-bar">
-          <a href="#home" class="icon-btn glass" aria-label="结束">${ICON.close}</a>
-          <div class="progress" aria-label="进度">
+          <a href="#home" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a>
+          <div class="progress" aria-label="${t('study.progress')}">
             <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
             <div class="progress-text">${session.done} / ${total}</div>
           </div>
-          <button class="icon-btn glass" id="undoBtn" aria-label="撤销" ${session.undo ? '' : 'disabled'}>${ICON.undo}</button>
+          <button class="icon-btn glass" id="undoBtn" aria-label="${t('study.undo')}" ${session.undo ? '' : 'disabled'}>${ICON.undo}</button>
         </div>
         <div class="card-area">
           <div class="card">
@@ -386,69 +444,65 @@ function sessionView({ types, mode }) {
     show(item.w, item.t);
   }
 
-  function show(w, t) {
-    if (t === 'meaning') meaningCard(w);
-    else if (t === 'article') articleCard(w, { scheduled: true });
+  function show(w, ty) {
+    if (ty === 'meaning') meaningCard(w);
+    else if (ty === 'article') articleCard(w, { scheduled: true });
     else spellCard(w);
   }
 
-  async function rate(w, t, g, shownAt, advance = true) {
-    const snap = await S.answer(w, t, g, Date.now() - shownAt);
-    session.undo = { snap, t };
+  async function rate(w, ty, g, shownAt, advance = true) {
+    const snap = await S.answer(w, ty, g, Date.now() - shownAt);
+    session.undo = { snap, ty };
     session.done++;
     if (g === 1) session.again++;
     if (advance) next();
+    else updateProgress();
   }
 
   async function doUndo() {
     if (!session.undo) return;
-    const { snap, t } = session.undo;
+    const { snap, ty } = session.undo;
     session.undo = null;
     const w = await S.undo(snap);
     session.done = Math.max(0, session.done - 1);
     session.lastWordId = w.id;
-    show(state.words.get(w.id), t);
+    show(state.words.get(w.id), ty);
   }
 
-  function metaHTML(w, t) {
-    const c = S.getCard(w, t);
-    const tags = [`<span class="tag t-${t}">${S.TYPE_LABEL[t]}</span>`];
-    if (c.state === 'new') tags.push('<span class="tag new">新</span>');
-    else if (c.state === 'relearning') tags.push('<span class="tag relearn">重学</span>');
+  function metaHTML(w, ty) {
+    const c = S.getCard(w, ty);
+    const tags = [`<span class="tag t-${ty}">${t(`type.${ty}`)}</span>`];
+    if (c.state === 'new') tags.push(`<span class="tag new">${t('tag.new')}</span>`);
+    else if (c.state === 'relearning') tags.push(`<span class="tag relearn">${t('tag.relearn')}</span>`);
     if (w.tags?.length) tags.push(`<span class="tag">${esc(w.tags[0])}</span>`);
     return tags.join('');
   }
 
-  function ratingButtons(w, t) {
-    const p = S.preview(w, t);
+  function ratingButtons(w, ty) {
+    const p = S.preview(w, ty);
     const now = Date.now();
-    const lbl = (g) => formatIvl(Math.max(60_000, p[g].due - now));
-    return `<div class="rate">
-      <button class="r1" data-g="1"><b>重来</b><span>${lbl(1)}</span></button>
-      <button class="r2" data-g="2"><b>困难</b><span>${lbl(2)}</span></button>
-      <button class="r3" data-g="3"><b>良好</b><span>${lbl(3)}</span></button>
-      <button class="r4" data-g="4"><b>简单</b><span>${lbl(4)}</span></button>
-    </div>`;
+    return `<div class="rate">${[1, 2, 3, 4]
+      .map((g) => `<button class="r${g}" data-g="${g}"><b>${t(`rate.${g}`)}</b><span>${fmtIvl(Math.max(60_000, p[g].due - now))}</span></button>`)
+      .join('')}</div>`;
   }
 
-  // 释义卡：看德语想中文
   function meaningCard(w) {
     const shownAt = Date.now();
     let revealed = false;
-    const extra = [POS_LABEL[w.pos], pluralText(w), w.forms].filter(Boolean).map(esc).join(' · ');
+    const extra = [posLabel(w.pos), pluralLabel(w), w.forms].filter(Boolean).map(esc).join(' · ');
     shell(
       `<div class="card-body flash" id="flash">
         <div class="word-big" lang="de">${wordHTML(w)}</div>
-        ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="朗读">${ICON.speak}</button>` : ''}
+        ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="${t('listen')}">${ICON.speak}</button>` : ''}
         <div class="answer" id="answer" hidden>
           ${extra ? `<div class="sub">${extra}</div>` : ''}
-          <div class="zh">${esc(w.zh) || '<span class="tertiary">还没有释义</span>'}</div>
+          <div class="zh">${esc(w.zh) || `<span class="tertiary">${t('card.noMeaning')}</span>`}</div>
           ${w.example ? `<div class="example"><div lang="de">${esc(w.example)}</div>${w.exampleZh ? `<div class="secondary">${esc(w.exampleZh)}</div>` : ''}</div>` : ''}
           ${w.notes ? `<div class="notes">${esc(w.notes)}</div>` : ''}
-          <a class="edit-link" href="#word/${encodeURIComponent(w.id)}">${ICON.edit} 编辑</a>
+          <a class="edit-link" href="${wordLink(w)}">${ICON.edit} ${t('edit')}</a>
         </div>
       </div>`,
-      `<button class="btn" id="reveal">显示答案<kbd>空格</kbd></button>`,
+      `<button class="btn" id="reveal">${t('card.reveal')}<kbd>${t('key.space')}</kbd></button>`,
       metaHTML(w, 'meaning'),
     );
     const say = () => speak(displayWord(w));
@@ -482,22 +536,22 @@ function sessionView({ types, mode }) {
     };
   }
 
-  // 冠词卡
   function articleCard(w, { scheduled, onDone }) {
     const shownAt = Date.now();
     let answered = false;
     shell(
       `<div class="card-body">
         <div class="drill-word" lang="de">${esc(w.lemma)}</div>
-        <div class="drill-zh">${esc(shortZh(w.zh))}</div>
+        <div class="drill-zh">${esc(shortMeaning(w.zh))}</div>
         <div class="feedback" id="fb"></div>
       </div>`,
       `<div class="art-buttons">
-        ${ARTICLES.map((a, i) => `<button class="art-btn b-${a}" data-a="${a}">${a}<kbd>${i + 1}</kbd></button>`).join('')}
+        ${ARTICLES.map((a, i) => `<button class="art-btn b-${a}" data-a="${a}" lang="de">${a}<kbd>${i + 1}</kbd></button>`).join('')}
       </div>`,
-      scheduled ? metaHTML(w, 'article') : '<span class="tag t-article">自由练习</span>' + (drill ? drill.scoreHTML() : ''),
+      scheduled ? metaHTML(w, 'article') : `<span class="tag t-article">${t('drill.free')}</span>` + (drill ? drill.scoreHTML() : ''),
     );
 
+    let go = null;
     const choose = async (a) => {
       if (answered) return;
       answered = true;
@@ -505,49 +559,55 @@ function sessionView({ types, mode }) {
       const ok = a === w.article;
       const g = ok ? (ms < 2500 ? 3 : 2) : 1;
       $$('.art-btn').forEach((b) => {
-        b.disabled = true;
         if (b.dataset.a === w.article) b.classList.add('correct');
         else if (b.dataset.a === a) b.classList.add('wrong');
+        else b.classList.add('dim');
       });
       const comp = compoundBase(w.lemma, S.liveWords());
       const rule = articleRule(w.lemma);
       let hint = '';
       if (comp) {
-        hint = `复合词，冠词跟最后一部分：<span class="g g-${comp.article}"><span class="art">${comp.article}</span> ${esc(comp.lemma)}</span>`;
+        const base = `<span class="g g-${comp.article}" lang="de"><span class="art">${comp.article}</span> ${esc(comp.lemma)}</span>`;
+        hint = t('drill.compound', { word: base });
       } else if (rule) {
-        hint = esc(rule.text) + (rule.article !== w.article ? ' <span class="exc">这个词是例外</span>' : '');
+        hint = esc(t(`rule.${rule.id}`)) + (rule.article !== w.article ? ` <span class="exc">${t('drill.exception')}</span>` : '');
       }
-      const pl = pluralText(w);
+      const pl = pluralLabel(w);
+      const exception = !comp && rule && rule.article !== w.article;
+      const pause = !ok || exception;
       $('#fb').innerHTML = `
-        <div class="fb-badge">${ok ? '答对了' : '答错了'}</div>
-        <div class="fb-word">${wordHTML(w)}${pl ? `<span class="secondary"> · ${esc(pl)}</span>` : ''}</div>
-        ${hint ? `<div class="fb-hint">${hint}</div>` : ''}`;
+        <div class="fb-badge">${ok ? t('drill.correct') : t('drill.wrong')}</div>
+        <div class="fb-word" lang="de">${wordHTML(w)}${pl ? `<span class="secondary"> · ${esc(pl)}</span>` : ''}</div>
+        ${hint ? `<div class="fb-hint">${hint}</div>` : ''}
+        ${pause ? `<div class="tap-hint">${t('drill.tapToContinue')}</div>` : ''}`;
       $('#fb').className = `feedback ${ok ? 'ok' : 'bad'}`;
       if (state.settings.autoSpeak) speak(displayWord(w));
 
       if (scheduled) await rate(w, 'article', g, shownAt, false);
       else if (!ok) await S.answer(w, 'article', 1, ms);
       onDone?.(ok);
-      const go = () => (scheduled ? next() : drill.next());
-      const exception = !comp && rule && rule.article !== w.article;
-      // 答错或遇到例外时停下来，让人看清楚；答对就自动下一张
-      if (ok && !exception) {
-        later(go, 750);
-        keyHandler = (e) => (e.key === ' ' || e.key === 'Enter') && go();
-      } else {
-        later(() => {
-          $('.study-actions').innerHTML = `<button class="btn" id="cont">继续<kbd>空格</kbd></button>`;
-          $('#cont').addEventListener('click', go);
-        }, 350);
-        keyHandler = (e) => {
-          if (e.key === ' ' || e.key === 'Enter') {
-            e.preventDefault();
-            go();
-          } else if (e.key === 'z' || e.key === 'u') doUndo();
-        };
-      }
+      let moved = false;
+      go = () => {
+        if (moved) return;
+        moved = true;
+        scheduled ? next() : drill.next();
+      };
+      // Pause on a miss or an exception so it can sink in; otherwise move on by itself.
+      if (!pause) later(go, 750);
+      keyHandler = (e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault();
+          go();
+        } else if (e.key === 'z' || e.key === 'u') doUndo();
+      };
     };
-    $$('.art-btn').forEach((b) => b.addEventListener('click', () => choose(b.dataset.a)));
+    $$('.art-btn').forEach((b) =>
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        answered ? go?.() : choose(b.dataset.a);
+      }),
+    );
+    $('.card').addEventListener('click', () => answered && go?.());
     keyHandler = (e) => {
       const map = { 1: 'der', 2: 'die', 3: 'das', j: 'der', k: 'die', l: 'das' };
       if (map[e.key]) choose(map[e.key]);
@@ -555,11 +615,10 @@ function sessionView({ types, mode }) {
     };
   }
 
-  // 拼写卡：看中文写德语
   function spellCard(w) {
     const shownAt = Date.now();
     const needArticle = w.pos === 'noun' && w.article;
-    const hint = [POS_LABEL[w.pos], needArticle ? '连冠词一起写' : '', w.pos === 'verb' ? '写不定式' : '']
+    const hint = [posLabel(w.pos), needArticle ? t('spell.withArticle') : '', w.pos === 'verb' ? t('spell.infinitive') : '']
       .filter(Boolean)
       .join(' · ');
     shell(
@@ -568,14 +627,14 @@ function sessionView({ types, mode }) {
         ${hint ? `<div class="secondary t-sub" style="margin-top:6px">${hint}</div>` : ''}
         ${w.exampleZh ? `<div class="example secondary">${esc(w.exampleZh)}</div>` : ''}
         <form id="spellForm" class="spell-form" autocomplete="off">
-          <input id="spellIn" lang="de" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="${needArticle ? 'der / die / das …' : '德语'}">
+          <input id="spellIn" lang="de" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done" placeholder="${needArticle ? 'der / die / das …' : esc(t('spell.ph'))}">
           <div class="umlauts">${['ä', 'ö', 'ü', 'ß', 'Ä', 'Ö', 'Ü'].map((c) => `<button type="button" data-c="${c}">${c}</button>`).join('')}</div>
         </form>
         <div class="feedback" id="fb"></div>
       </div>`,
       `<div class="two">
-        <button class="btn gray" id="giveUp">不会</button>
-        <button class="btn" id="check">检查<kbd>↵</kbd></button>
+        <button class="btn gray" id="giveUp">${t('spell.giveUp')}</button>
+        <button class="btn" id="check">${t('spell.check')}<kbd>↵</kbd></button>
       </div>`,
       metaHTML(w, 'spell'),
     );
@@ -600,30 +659,30 @@ function sessionView({ types, mode }) {
       const fb = $('#fb');
       fb.className = `feedback ${cls}`;
       fb.innerHTML = `
-        <div class="fb-badge">${{ ok: '正确', near: '差一点', bad: '不对' }[cls]}</div>
-        <div class="fb-word">${wordHTML(w)}</div>
-        ${res.why ? `<div class="fb-hint">${esc(res.why)}</div>` : ''}
+        <div class="fb-badge">${t(`spell.${cls}`)}</div>
+        <div class="fb-word" lang="de">${wordHTML(w)}</div>
+        ${res.why ? `<div class="fb-hint">${t(`spell.why.${res.why}`)}</div>` : ''}
         ${w.example ? `<div class="fb-hint" lang="de">${esc(w.example)}</div>` : ''}`;
       if (state.settings.autoSpeak) speak(displayWord(w));
       let buttons;
       let def;
       if (res.result === 'exact') {
         buttons = [
-          [2, '困难'],
-          [3, '良好'],
-          [4, '简单'],
+          [2, t('rate.2')],
+          [3, t('rate.3')],
+          [4, t('rate.4')],
         ];
         def = 3;
       } else if (res.result === 'near') {
         buttons = [
-          [1, '重来'],
-          [2, '算对'],
+          [1, t('rate.1')],
+          [2, t('spell.countRight')],
         ];
         def = 2;
       } else {
         buttons = [
-          [1, '继续'],
-          [3, '我其实对了'],
+          [1, t('continue')],
+          [3, t('spell.iWasRight')],
         ];
         def = 1;
       }
@@ -654,18 +713,19 @@ function sessionView({ types, mode }) {
     $('#giveUp').addEventListener('click', () => !checked && finish({ result: 'wrong' }));
   }
 
-  // 冠词自由练习
   let drill = null;
   function startDrill() {
     const pool = S.drillPool();
-    if (!pool.length) return toast('先学几个名词，冠词卡才会出现');
+    if (!pool.length) return toast(t('drill.empty'));
     const recent = [];
     let right = 0;
     let total = 0;
     let streak = 0;
     drill = {
       scoreHTML: () =>
-        total ? `<span class="tag">${right}/${total}</span>${streak >= 3 ? `<span class="tag t-article">连对 ${streak}</span>` : ''}` : '',
+        total
+          ? `<span class="tag">${right}/${total}</span>${streak >= 3 ? `<span class="tag t-article">${t('drill.streak', { n: streak })}</span>` : ''}`
+          : '',
       next() {
         if (!alive) return;
         timers.forEach(clearTimeout);
@@ -692,8 +752,8 @@ function sessionView({ types, mode }) {
     keyHandler = null;
     const pendingDue = [];
     for (const w of S.liveWords()) {
-      for (const t of types) {
-        const c = w.cards[t];
+      for (const ty of types) {
+        const c = w.cards[ty];
         if (c && (c.state === 'learning' || c.state === 'relearning')) pendingDue.push(c.due);
       }
     }
@@ -701,26 +761,39 @@ function sessionView({ types, mode }) {
     const counts = S.todayCounts();
     $app.innerHTML = `
       <div class="study">
-        <div class="study-bar"><a href="#home" class="icon-btn glass" aria-label="完成">${ICON.close}</a><span></span><span></span></div>
+        <div class="study-bar"><a href="#home" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a><span></span><span></span></div>
         <div class="finish">
           <div class="done-circle">${ICON.check}</div>
-          <h2>${session.done ? '这一轮完成了' : '现在没有要做的卡'}</h2>
-          ${session.done ? `<p class="secondary">完成 ${session.done} 张，重来 ${session.again} 次</p>` : ''}
-          ${pendingDue.length ? `<p class="secondary t-sub">还有 ${pendingDue.length} 张学习中的卡，最早 ${formatIvl(pendingDue[0] - Date.now())}后到期</p>` : ''}
+          <h2>${session.done ? t('finish.title') : t('finish.none')}</h2>
+          ${session.done ? `<p class="secondary">${t('finish.summary', { n: session.done, again: session.again })}</p>` : ''}
+          ${
+            pendingDue.length
+              ? `<p class="secondary t-sub">${t('finish.pending', { n: pendingDue.length, t: fmtIvl(pendingDue[0] - Date.now()) })}</p>`
+              : ''
+          }
           <div class="btns">
             ${
               mode === 'article'
-                ? `<button class="btn" id="drill">自由练习冠词</button>
-                   <p class="secondary t-foot" style="margin:0 0 6px">从学过的名词里随机抽，易错的出现更多，答错会重新安排复习</p>`
+                ? `<button class="btn" id="drill">${t('finish.drill')}</button>
+                   <p class="secondary t-foot" style="margin:0 0 6px">${t('finish.drillFoot')}</p>`
                 : ''
             }
-            ${mode === 'study' ? `<a class="btn tinted" href="#article">冠词快练</a>` : ''}
-            ${mode === 'article' && counts.total ? `<a class="btn tinted" href="#study">继续今日学习（${counts.total}）</a>` : ''}
-            <a class="btn gray" href="#home">回到今天</a>
+            ${
+              mode === 'study' && !counts.total && counts.unseen
+                ? `<button class="btn" id="moreNew">${t('home.moreNew', { n: Math.min(10, counts.unseen) })}</button>`
+                : ''
+            }
+            ${mode === 'study' ? `<a class="btn tinted" href="#article">${t('home.articleDrill')}</a>` : ''}
+            ${mode === 'article' && counts.total ? `<a class="btn tinted" href="#study">${t('finish.continue', { n: counts.total })}</a>` : ''}
+            <a class="btn gray" href="#home">${t('finish.home')}</a>
           </div>
         </div>
       </div>`;
     $('#drill')?.addEventListener('click', startDrill);
+    $('#moreNew')?.addEventListener('click', async () => {
+      await S.addExtraNew(Math.min(10, counts.unseen));
+      next();
+    });
     syncNow();
   }
 
@@ -732,27 +805,26 @@ function sessionView({ types, mode }) {
   };
 }
 
-// 词库
 function wordsView() {
-  setNav({ title: '词库' });
+  setNav({ title: t('tab.words') });
   let q = '';
   let source = local.get('wordsSource', 'all');
   let status = local.get('wordsStatus', 'all');
   let limit = 150;
 
   $app.innerHTML = `
-    ${largeTitle('词库')}
-    <div class="search">${ICON.search}<input id="search" type="search" placeholder="搜索德语、中文或标签" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
+    ${largeTitle(t('tab.words'))}
+    <div class="search">${ICON.search}<input id="search" type="search" placeholder="${esc(t('words.search'))}" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"></div>
     <div class="menus">
       <select id="fSource" class="menu">
-        <option value="all">全部来源</option>
-        ${Object.entries(S.SOURCES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}
+        <option value="all">${t('words.allSources')}</option>
+        ${S.SOURCES.map((k) => `<option value="${k}">${t(`src.${k}`)}</option>`).join('')}
       </select>
       <select id="fStatus" class="menu">
-        <option value="all">全部状态</option>
-        ${Object.entries(S.STATUS_LABEL).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}
-        <option value="hardArticle">冠词易错</option>
-        <option value="incomplete">信息不全</option>
+        <option value="all">${t('words.allStatus')}</option>
+        ${S.STATUSES.map((k) => `<option value="${k}">${t(`st.${k}`)}</option>`).join('')}
+        <option value="hardArticle">${t('words.hardArticle')}</option>
+        <option value="incomplete">${t('words.incomplete')}</option>
       </select>
     </div>
     <section class="section">
@@ -776,14 +848,14 @@ function wordsView() {
       if (!ql) return true;
       return (
         w.lemma.toLowerCase().includes(ql) ||
-        (w.zh || '').includes(q) ||
-        (w.tags || []).some((t) => t.toLowerCase().includes(ql)) ||
+        (w.zh || '').toLowerCase().includes(ql) ||
+        (w.tags || []).some((tag) => tag.toLowerCase().includes(ql)) ||
         (w.plural || '').toLowerCase().includes(ql)
       );
     });
     if (status === 'hardArticle') list.sort((a, b) => b.cards.article.lapses - a.cards.article.lapses);
     else list.sort((a, b) => b.createdAt - a.createdAt);
-    $('#count').textContent = `${list.length} 个词`;
+    $('#count').textContent = t('n.words', { n: list.length });
     const box = $('#list');
     box.hidden = !list.length;
     box.innerHTML =
@@ -793,17 +865,18 @@ function wordsView() {
           const st = S.wordStatus(w);
           const pl = w.plural && w.plural !== NO_PLURAL ? `<span class="secondary t-sub"> · ${esc(w.plural)}</span>` : '';
           return row({
-            title: `<span class="wr-de" lang="de">${wordHTML(w)}</span>${pl}`,
-            sub: esc(shortZh(w.zh)) || '<span class="warn-text">缺释义</span>',
-            detail: `<span class="status s-${st}">${S.STATUS_LABEL[st]}</span>`,
-            href: `#word/${encodeURIComponent(w.id)}`,
-            cls: 'word-row',
+            title: `<span class="wr-de" lang="de">${wordHTML(w)}${pl}</span>`,
+            sub: esc(shortMeaning(w.zh)) || `<span class="warn-text">${t('words.noMeaning')}</span>`,
+            detail: `<span class="status s-${st}">${t(`st.${st}`)}</span>`,
+            href: wordLink(w),
           });
         })
         .join('') +
-      (list.length > limit ? `<button class="row action center" id="more">再显示 ${Math.min(150, list.length - limit)} 个</button>` : '');
+      (list.length > limit
+        ? `<button class="row action center" id="more">${t('words.more', { n: Math.min(150, list.length - limit) })}</button>`
+        : '');
     $('#empty')?.remove();
-    if (!list.length) box.insertAdjacentHTML('afterend', '<p class="empty" id="empty">没有匹配的词</p>');
+    if (!list.length) box.insertAdjacentHTML('afterend', `<p class="empty" id="empty">${t('words.empty')}</p>`);
     $('#more')?.addEventListener('click', () => {
       limit += 150;
       render();
@@ -827,29 +900,22 @@ function wordsView() {
   render();
 }
 
-// 编辑单词
 function editView(id) {
   const w = state.words.get(id);
+  const back = { href: '#words', label: t('tab.words') };
   if (!w || w.deleted) {
-    setNav({ title: '', back: { href: '#words', label: '词库' }, large: false });
-    $app.innerHTML = '<p class="empty">找不到这个词</p>';
+    setNav({ title: '', back, large: false });
+    $app.innerHTML = `<p class="empty">${t('edit.notFound')}</p>`;
     return;
   }
-  setNav({
-    title: displayWord(w),
-    back: { href: '#words', label: '词库' },
-    extra: `<button class="nav-pill glass-tint" id="saveBtn">保存</button>`,
-    large: false,
-  });
-  const opt = (obj, cur) =>
-    Object.entries(obj)
-      .map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${v}</option>`)
-      .join('');
-  const cardRows = S.CARD_TYPES.filter((t) => w.cards[t] || S.eligible(w, t))
-    .map((t) => {
-      const c = S.getCard(w, t);
-      const sub = c.state === 'new' ? '' : `稳定性 ${c.s.toFixed(1)} 天 · 遗忘 ${c.lapses || 0} 次`;
-      return row({ title: S.TYPE_LABEL[t], sub, detail: dueText(c) });
+  setNav({ title: displayWord(w), back, large: false });
+  const options = (keys, prefix, cur) =>
+    keys.map((k) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${t(`${prefix}.${k}`)}</option>`).join('');
+  const cardRows = S.CARD_TYPES.filter((ty) => w.cards[ty] || S.eligible(w, ty))
+    .map((ty) => {
+      const c = S.getCard(w, ty);
+      const sub = c.state === 'new' ? '' : t('edit.progressSub', { s: c.s.toFixed(1), l: c.lapses || 0 });
+      return row({ title: t(`type.${ty}`), sub, detail: dueText(c) });
     })
     .join('');
   const noAutoFix = 'autocapitalize="off" autocorrect="off" spellcheck="false"';
@@ -858,64 +924,81 @@ function editView(id) {
     <div style="height:12px"></div>
     <form id="editForm">
       <section class="section">
-        <div class="section-header">单词</div>
+        <div class="section-header">${t('edit.word')}</div>
         <div class="list">
           <div class="row">
             <div class="segmented in-row" id="artSeg">
-              ${['', ...ARTICLES].map((a) => `<button type="button" data-a="${a}" class="${a === (w.article || '') ? 'on' : ''}">${a || '无'}</button>`).join('')}
+              ${['', ...ARTICLES]
+                .map((a) => `<button type="button" data-a="${a}" class="${a === (w.article || '') ? 'on' : ''}">${a || t('edit.noArticle')}</button>`)
+                .join('')}
             </div>
           </div>
-          <label class="row field"><span>单词</span><input name="lemma" value="${esc(w.lemma)}" required lang="de" ${noAutoFix}></label>
-          <label class="row field"><span>复数</span><input name="plural" value="${esc(w.plural)}" placeholder="无复数填 —" lang="de" ${noAutoFix}></label>
-          <label class="row field"><span>词性</span><select name="pos"><option value="">未设置</option>${opt(POS_LABEL, w.pos)}</select>${ICON.chev}</label>
-          <label class="row field"><span>变化</span><input name="forms" value="${esc(w.forms)}" placeholder="过去式, 完成时" lang="de" ${noAutoFix}></label>
+          <label class="row field"><span>${t('edit.word')}</span><input name="lemma" value="${esc(w.lemma)}" required lang="de" ${noAutoFix}></label>
+          <label class="row field"><span>${t('edit.plural')}</span><input name="plural" value="${esc(w.plural)}" placeholder="${esc(t('edit.pluralPh'))}" lang="de" ${noAutoFix}></label>
+          <label class="row field"><span>${t('edit.pos')}</span><select name="pos"><option value="">${t('edit.posUnset')}</option>${options(POS, 'pos', w.pos)}</select>${ICON.chev}</label>
+          <label class="row field"><span>${t('edit.forms')}</span><input name="forms" value="${esc(w.forms)}" placeholder="${esc(t('edit.formsPh'))}" lang="de" ${noAutoFix}></label>
         </div>
       </section>
       <section class="section">
-        <div class="section-header">释义</div>
+        <div class="section-header">${t('edit.meaning')}</div>
         <div class="list">
-          <label class="row field stack"><span>中文</span><textarea name="zh" rows="1">${esc(w.zh)}</textarea></label>
-          <label class="row field stack"><span>例句</span><textarea name="example" rows="1" lang="de" ${noAutoFix}>${esc(w.example)}</textarea></label>
-          <label class="row field stack"><span>例句翻译</span><textarea name="exampleZh" rows="1">${esc(w.exampleZh)}</textarea></label>
-          <label class="row field stack"><span>笔记</span><textarea name="notes" rows="1" placeholder="搭配、易混词、记忆方法">${esc(w.notes)}</textarea></label>
+          <label class="row field stack"><span>${t('edit.meaning')}</span><textarea name="zh" rows="1">${esc(w.zh)}</textarea></label>
+          <label class="row field stack"><span>${t('edit.example')}</span><textarea name="example" rows="1" lang="de" ${noAutoFix}>${esc(w.example)}</textarea></label>
+          <label class="row field stack"><span>${t('edit.exampleTr')}</span><textarea name="exampleZh" rows="1">${esc(w.exampleZh)}</textarea></label>
+          <label class="row field stack"><span>${t('edit.notes')}</span><textarea name="notes" rows="1" placeholder="${esc(t('edit.notesPh'))}">${esc(w.notes)}</textarea></label>
         </div>
       </section>
       <section class="section">
-        <div class="section-header">分类</div>
+        <div class="section-header">${t('edit.category')}</div>
         <div class="list">
-          <label class="row field"><span>来源</span><select name="source">${opt(S.SOURCES, w.source)}</select>${ICON.chev}</label>
-          <label class="row field"><span>标签</span><input name="tags" value="${esc((w.tags || []).join(', '))}" placeholder="逗号分隔"></label>
+          <label class="row field"><span>${t('edit.source')}</span><select name="source">${options(S.SOURCES, 'src', w.source)}</select>${ICON.chev}</label>
+          <label class="row field"><span>${t('edit.tags')}</span><input name="tags" value="${esc((w.tags || []).join(', '))}" placeholder="${esc(t('edit.tagsPh'))}"></label>
         </div>
       </section>
     </form>
     <section class="section">
-      <div class="section-header">复习进度</div>
+      <div class="section-header">${t('edit.progress')}</div>
       <div class="list">${cardRows}</div>
     </section>
     <section class="section">
       <div class="list">
-        ${ttsAvailable() ? `<button class="row action" id="speak">朗读</button>` : ''}
-        <button class="row action" id="suspend">${w.suspended ? '恢复复习' : '暂停复习'}</button>
-        <button class="row action" id="reset">重置进度</button>
+        ${ttsAvailable() ? `<button class="row action" id="speak">${t('listen')}</button>` : ''}
+        <button class="row action" id="suspend">${w.suspended ? t('edit.resume') : t('edit.suspend')}</button>
+        <button class="row action" id="reset">${t('edit.reset')}</button>
       </div>
     </section>
     <section class="section">
-      <div class="list"><button class="row destructive" id="del">删除单词</button></div>
+      <div class="list"><button class="row destructive" id="del">${t('edit.delete')}</button></div>
     </section>`;
 
+  // Edits save automatically, like the iOS Settings and Contacts apps.
   const form = $('#editForm');
   $$('.field textarea', form).forEach(autoGrow);
   let article = w.article || '';
+  let timer = null;
+  const queueSave = () => {
+    clearTimeout(timer);
+    timer = setTimeout(save, 500);
+  };
+  const flush = () => {
+    if (!timer) return;
+    clearTimeout(timer);
+    save();
+  };
   $('#artSeg').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
     article = b.dataset.a;
     $$('#artSeg button').forEach((x) => x.classList.toggle('on', x === b));
+    queueSave();
   });
+  form.addEventListener('input', queueSave);
+  form.addEventListener('change', queueSave);
   $('#speak')?.addEventListener('click', () => speak(displayWord(w)));
-  const save = async () => {
-    if (!form.reportValidity()) return;
+  async function save() {
+    timer = null;
     const f = Object.fromEntries(new FormData(form));
+    if (!f.lemma.trim()) return;
     Object.assign(w, {
       article,
       lemma: f.lemma.trim(),
@@ -929,64 +1012,64 @@ function editView(id) {
       source: f.source,
       tags: f.tags
         .split(/[,，]/)
-        .map((t) => t.trim())
+        .map((tag) => tag.trim())
         .filter(Boolean),
     });
     await S.saveWord(w);
-    toast('已保存');
-    history.length > 1 ? history.back() : (location.hash = '#words');
-  };
-  document.getElementById('saveBtn').addEventListener('click', save);
+    document.getElementById('navTitle').textContent = displayWord(w);
+  }
   form.addEventListener('submit', (e) => {
     e.preventDefault();
-    save();
+    flush();
   });
   $('#suspend').addEventListener('click', async () => {
+    flush();
     w.suspended = !w.suspended;
     await S.saveWord(w);
-    toast(w.suspended ? '已暂停，不会再出现在复习里' : '已恢复复习');
+    toast(w.suspended ? t('edit.suspended') : t('edit.resumed'));
     route();
   });
   $('#reset').addEventListener('click', async () => {
-    if (!confirm('把这个词的所有卡片恢复成新词？')) return;
+    if (!confirm(t('edit.confirmReset'))) return;
     await S.resetProgress(w);
     route();
   });
   $('#del').addEventListener('click', async () => {
-    if (!confirm(`删除「${displayWord(w)}」？`)) return;
+    if (!confirm(t('edit.confirmDelete', { w: displayWord(w) }))) return;
+    clearTimeout(timer);
+    timer = null;
     await S.deleteWord(w);
-    toast('已删除');
+    toast(t('edit.deleted'));
     location.hash = '#words';
   });
+  return flush;
 }
 
-// 添加
 function addView() {
-  setNav({ title: '添加' });
+  setNav({ title: t('add.title') });
   let items = [];
-  const src = local.get('addSource', 'exam');
+  // Meanings and articles typed into the preview, keyed by the source line, so they
+  // survive re-parsing while the list is still being edited.
+  const fills = new Map();
+  const src = pendingAdd ? 'daily' : local.get('addSource', 'exam');
   const tags = pendingAdd ? '' : local.get('addTags', '');
   $app.innerHTML = `
-    ${largeTitle('添加')}
+    ${largeTitle(t('add.title'))}
     <div class="segmented" id="seg">
-      ${Object.entries(S.SOURCES).map(([k, v]) => `<button type="button" data-v="${k}" class="${k === src ? 'on' : ''}">${v}</button>`).join('')}
+      ${S.SOURCES.map((k) => `<button type="button" data-v="${k}" class="${k === src ? 'on' : ''}">${t(`src.${k}`)}</button>`).join('')}
     </div>
     <section class="section">
       <div class="list">
-        <label class="row field"><span>标签</span><input id="tags" value="${esc(tags)}" placeholder="如 Goethe B1、第 3 课"></label>
+        <label class="row field"><span>${t('edit.tags')}</span><input id="tags" value="${esc(tags)}" placeholder="${esc(t('add.tagsPh'))}"></label>
         <div class="row">
-          <textarea class="bare" id="lines" rows="7" lang="de" autocapitalize="off" autocorrect="off" spellcheck="false" style="min-height:9em" placeholder="一行一个词
-der Tisch, -e 桌子
-die Mutter, ¨ 母亲
-gehen, ging, ist gegangen 走
-Zeitung"></textarea>
+          <textarea class="bare" id="lines" rows="7" lang="de" autocapitalize="off" autocorrect="off" spellcheck="false" style="min-height:9em" placeholder="${esc(t('add.ph'))}"></textarea>
         </div>
       </div>
-      <div class="section-footer">可以直接粘贴 Excel 或 Numbers 的两列（德语、中文）。复数写成 -e、¨-er、- 都行，会自动算出完整形式。</div>
+      <div class="section-footer">${esc(t('add.foot'))}</div>
     </section>
-    <section class="section"><button class="btn" id="parse">识别</button></section>
     <div id="preview"></div>`;
 
+  const lines = $('#lines');
   $('#seg').addEventListener('click', (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -994,31 +1077,36 @@ Zeitung"></textarea>
     local.set('addSource', b.dataset.v);
   });
   const getSource = () => $('#seg .on')?.dataset.v || 'daily';
-  if (pendingAdd) {
-    $('#lines').value = pendingAdd;
-    pendingAdd = '';
-    setTimeout(doParse, 0);
-  }
 
-  function doParse() {
-    items = $('#lines').value.split(/\r?\n/).map(parseLine).filter(Boolean);
+  function parse() {
+    items = lines.value.split(/\r?\n/).map(parseLine).filter(Boolean);
     const seen = new Set();
     for (const it of items) {
+      Object.assign(it, fills.get(it.raw));
       const key = `${it.article}|${it.lemma.toLowerCase()}`;
       it.dup = Boolean(S.findDuplicate(it.lemma, it.article)) || seen.has(key);
       seen.add(key);
     }
     renderPreview();
-    if (items.length) $('#preview').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-  $('#parse').addEventListener('click', doParse);
+  let parseTimer;
+  lines.addEventListener('input', () => {
+    clearTimeout(parseTimer);
+    parseTimer = setTimeout(parse, 250);
+  });
 
-  const missingCount = () => items.filter((x) => !x.dup && isIncomplete(x)).length;
+  const fill = (it, patch) => {
+    Object.assign(it, patch);
+    fills.set(it.raw, { ...fills.get(it.raw), ...patch });
+  };
+
   const headerText = () => {
     const fresh = items.filter((i) => !i.dup).length;
     const dup = items.length - fresh;
-    const miss = missingCount();
-    return [`${fresh} 个新词`, dup ? `${dup} 个重复会跳过` : '', miss ? `${miss} 个待补全` : ''].filter(Boolean).join(' · ');
+    const miss = items.filter((x) => !x.dup && isIncomplete(x)).length;
+    return [t('add.new', { n: fresh }), dup ? t('add.dup', { n: dup }) : '', miss ? t('add.missing', { n: miss }) : '']
+      .filter(Boolean)
+      .join(' · ');
   };
 
   function renderPreview() {
@@ -1034,49 +1122,49 @@ Zeitung"></textarea>
         <div class="list">
           ${items
             .map((it, i) => {
-              const pl = it.plural ? `<span class="secondary t-sub"> · ${esc(it.plural === NO_PLURAL ? '无复数' : it.plural)}</span>` : '';
+              const pl = it.plural ? `<span class="secondary t-sub"> · ${esc(it.plural === NO_PLURAL ? t('add.noPlural') : it.plural)}</span>` : '';
               const forms = it.forms ? `<span class="secondary t-sub"> · ${esc(it.forms)}</span>` : '';
-              let body;
-              if (it.dup) body = '<div class="row-sub">已在词库里</div>';
+              let body = '';
+              if (it.dup) body = `<div class="row-sub">${t('add.exists')}</div>`;
               else {
-                body = '';
                 if (it.pos === 'noun' && !it.article) {
-                  body += `<div class="pv-art">${ARTICLES.map((a) => `<button class="b-${a}" data-i="${i}" data-a="${a}">${a}</button>`).join('')}</div>`;
+                  body += `<div class="pv-art">${ARTICLES.map((a) => `<button class="b-${a}" data-i="${i}" data-a="${a}" lang="de">${a}</button>`).join('')}</div>`;
                 }
-                body += it.zh
-                  ? `<div class="row-sub">${esc(it.zh)}</div>`
-                  : `<input class="pv-zh" data-i="${i}" placeholder="中文释义" autocomplete="off" enterkeyhint="next">`;
+                body += fills.get(it.raw)?.zh !== undefined || !it.zh
+                  ? `<input class="pv-zh" data-i="${i}" value="${esc(it.zh)}" placeholder="${esc(t('edit.meaning'))}" autocomplete="off" enterkeyhint="next">`
+                  : `<div class="row-sub">${esc(it.zh)}</div>`;
               }
               return `<div class="row pv ${it.dup ? 'dup' : ''}">
                 <div class="row-main"><div lang="de">${wordHTML(it)}${pl}${forms}</div>${body}</div>
-                <button class="x" data-i="${i}" aria-label="移除">✕</button>
+                <button class="x" data-i="${i}" aria-label="${t('add.remove')}">✕</button>
               </div>`;
             })
             .join('')}
         </div>
-        <div class="section-footer">没补全的也可以先导入，之后在词库里筛选“信息不全”。</div>
+        <div class="section-footer">${esc(t('add.previewFoot'))}</div>
       </section>
       <section class="section">
-        <button class="btn" id="import" ${fresh.length ? '' : 'disabled'}>导入 ${fresh.length} 个词</button>
+        <button class="btn" id="import" ${fresh.length ? '' : 'disabled'}>${t('add.import', { n: fresh.length })}</button>
       </section>`;
+    // Removing a row removes its line from the text as well.
     $$('.pv .x', box).forEach((b) =>
       b.addEventListener('click', () => {
-        items.splice(+b.dataset.i, 1);
-        renderPreview();
+        const raw = items[+b.dataset.i].raw;
+        const all = lines.value.split(/\r?\n/);
+        all.splice(all.findIndex((l) => l.trim() === raw), 1);
+        lines.value = all.join('\n');
+        parse();
       }),
     );
     $$('.pv-art button', box).forEach((b) =>
       b.addEventListener('click', () => {
-        items[+b.dataset.i].article = b.dataset.a;
-        renderPreview();
+        fill(items[+b.dataset.i], { article: b.dataset.a });
+        parse();
       }),
     );
     $$('.pv-zh', box).forEach((inp) => {
-      // 失焦时保存；只刷新计数，不重绘列表，免得打断输入
-      inp.addEventListener('change', () => {
-        items[+inp.dataset.i].zh = inp.value.trim();
-        $('#pvHead', box).textContent = headerText();
-      });
+      inp.addEventListener('input', () => fill(items[+inp.dataset.i], { zh: inp.value.trim() }));
+      inp.addEventListener('change', () => ($('#pvHead', box).textContent = headerText()));
       inp.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
@@ -1089,31 +1177,37 @@ Zeitung"></textarea>
   }
 
   async function doImport() {
-    $$('.pv-zh').forEach((inp) => (items[+inp.dataset.i].zh = inp.value.trim()));
     const source = getSource();
     const tagList = $('#tags')
       .value.split(/[,，]/)
-      .map((t) => t.trim())
+      .map((tag) => tag.trim())
       .filter(Boolean);
     local.set('addTags', $('#tags').value);
     const words = items.filter((i) => !i.dup).map((i) => S.makeWord({ ...i, source, tags: tagList }));
-    // 保持输入顺序：createdAt 递增
+    // keep the pasted order
     const base = Date.now();
     words.forEach((w, i) => (w.createdAt = base + i));
     await S.addWords(words);
-    toast(`已导入 ${words.length} 个词`);
+    toast(t('add.imported', { n: words.length }));
     items = [];
-    $('#lines').value = '';
+    fills.clear();
+    lines.value = '';
     renderPreview();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
+
+  if (pendingAdd) {
+    lines.value = pendingAdd;
+    pendingAdd = '';
+    parse();
+    $('.pv-zh')?.focus();
+  }
 }
 
-// 统计
 function statsView() {
-  setNav({ title: '统计' });
+  setNav({ title: t('tab.stats') });
   const st = S.stats();
-  const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)}<small>%</small>`);
+  const pct = (v) => (v == null ? '—' : `${Math.round(v * 100)}%`);
   const bars = (arr, labels) => {
     const max = Math.max(1, ...arr);
     return `<div class="bars">${arr
@@ -1124,63 +1218,73 @@ function statsView() {
       .join('')}</div>`;
   };
   const today = dayStart(Date.now());
-  const dayLbl = (ts) => `${new Date(ts).getMonth() + 1}/${new Date(ts).getDate()}`;
-  const pastLabels = st.perDay.map((_, i) => (i === 13 ? '今天' : i % 2 ? '' : dayLbl(today - (13 - i) * DAY)));
-  const futLabels = st.forecast.map((_, i) => (i === 0 ? '今天' : i === 1 ? '明天' : dayLbl(today + i * DAY)));
-  const segs = ['new', 'learning', 'young', 'mature', 'suspended'];
+  const dayLbl = (ts) => new Date(ts).toLocaleDateString(locale(), { month: 'numeric', day: 'numeric' });
+  const pastLabels = st.perDay.map((_, i) => (i === 13 ? t('day.today') : i % 2 ? '' : dayLbl(today - (13 - i) * DAY)));
+  const futLabels = st.forecast.map((_, i) => (i === 0 ? t('day.today') : i === 1 ? t('day.tomorrow') : dayLbl(today + i * DAY)));
+  const tile = (label, value, unit, color) =>
+    `<div class="tile"><div class="summary-label">${label}</div><div class="summary-num" style="color:var(--${color})">${value}<small>${unit}</small></div></div>`;
 
   $app.innerHTML = `
-    ${largeTitle('统计')}
+    ${largeTitle(t('tab.stats'))}
     <div class="tiles">
-      <div class="tile"><div class="summary-label">连续</div><div class="summary-num" style="color:var(--orange)">${st.streak}<small>天</small></div></div>
-      <div class="tile"><div class="summary-label">今日</div><div class="summary-num" style="color:var(--green)">${st.todayReviews}<small>张</small></div></div>
-      <div class="tile"><div class="summary-label">用时</div><div class="summary-num" style="color:var(--blue)">${st.todayMinutes}<small>分钟</small></div></div>
-      <div class="tile"><div class="summary-label">词库</div><div class="summary-num" style="color:var(--tint)">${st.total}<small>词</small></div></div>
+      ${tile(t('stats.streak'), st.streak, t('unit.d'), 'orange')}
+      ${tile(t('stats.today'), st.todayReviews, t('unit.cards'), 'green')}
+      ${tile(t('stats.time'), st.todayMinutes, t('unit.min'), 'blue')}
+      ${tile(t('stats.words'), st.total, t('unit.words'), 'tint')}
     </div>
     <section class="section">
-      <div class="section-header">词库状态</div>
+      <div class="section-header">${t('stats.status')}</div>
       <div class="list"><div class="chart-cell">
-        <div class="status-stack">${segs
-          .filter((s) => st.byStatus[s])
-          .map((s) => `<div class="seg-bar s-${s}" style="flex:${st.byStatus[s]}" title="${S.STATUS_LABEL[s]}"></div>`)
+        <div class="status-stack">${S.STATUSES.filter((k) => st.byStatus[k])
+          .map((k) => `<div class="seg-bar s-${k}" style="flex:${st.byStatus[k]}" title="${t(`st.${k}`)}"></div>`)
           .join('')}</div>
-        <div class="legend">${segs.map((s) => `<span><i class="s-${s}"></i>${S.STATUS_LABEL[s]} ${st.byStatus[s]}</span>`).join('')}</div>
+        <div class="legend">${S.STATUSES.map((k) => `<span><i class="s-${k}"></i>${t(`st.${k}`)} ${st.byStatus[k]}</span>`).join('')}</div>
       </div></div>
     </section>
     <section class="section">
-      <div class="section-header">近 30 天记住的比例</div>
+      <div class="section-header">${t('stats.retention')}</div>
       <div class="list">
-        ${S.CARD_TYPES.map((t) => row({ title: S.TYPE_LABEL[t], detail: `<span class="t-headline" style="color:var(--label)">${pct(st.retention[t]).replace('<small>%</small>', '%')}</span>` })).join('')}
+        ${S.CARD_TYPES.map((ty) =>
+          row({ title: t(`type.${ty}`), detail: `<span class="t-headline" style="color:var(--label)">${pct(st.retention[ty])}</span>` }),
+        ).join('')}
       </div>
-      <div class="section-footer">目标是 ${Math.round(state.settings.retention * 100)}%。明显偏低说明新词加得太快，可以在设置里减少每天新词。</div>
+      <div class="section-footer">${t('stats.retentionFoot', { p: Math.round(state.settings.retention * 100) })}</div>
     </section>
     <section class="section">
-      <div class="section-header">未来 7 天复习量</div>
+      <div class="section-header">${t('stats.forecast')}</div>
       <div class="list"><div class="chart-cell">${bars(st.forecast, futLabels)}</div></div>
     </section>
     <section class="section">
-      <div class="section-header">近 14 天练习量</div>
+      <div class="section-header">${t('stats.history')}</div>
       <div class="list"><div class="chart-cell">${bars(st.perDay, pastLabels)}</div></div>
     </section>
     ${
       st.hardArticles.length
         ? `<section class="section">
-            <div class="section-header">冠词老是记错</div>
+            <div class="section-header">${t('stats.hard')}</div>
             <div class="list">${st.hardArticles
-              .map((w) => row({ title: `<span lang="de">${wordHTML(w)}</span>`, detail: `错 ${Number(w.cards.article.lapses) || 0} 次`, href: `#word/${encodeURIComponent(w.id)}` }))
+              .map((w) =>
+                row({
+                  title: `<span lang="de">${wordHTML(w)}</span>`,
+                  detail: t('stats.missed', { n: Number(w.cards.article.lapses) || 0 }),
+                  href: wordLink(w),
+                }),
+              )
               .join('')}</div>
           </section>`
         : ''
     }`;
 }
 
-// 设置
 function syncStatusHTML() {
-  if (sync.status === 'off') return row({ title: '未连接', sub: '进度只保存在这台设备上', icon: icon('cloud', 'gray') });
+  if (sync.status === 'off') return row({ title: t('set.syncOffTitle'), sub: t('set.syncOffSub'), icon: icon('cloud', 'gray') });
   const color = { idle: 'green', error: 'red', offline: 'gray' }[sync.status] || 'orange';
   return row({
-    title: SYNC_LABEL[sync.status],
-    sub: sync.error ? `<span class="danger-text">${esc(sync.error)}</span>` : `上次同步 ${relTime(sync.lastSync)}`,
+    title: t(`sync.${sync.status}`),
+    sub:
+      sync.status === 'error'
+        ? `<span class="danger-text">${syncError()}</span>`
+        : t('sync.last', { time: relTime(sync.lastSync) }),
     icon: icon('cloud', color),
   });
 }
@@ -1190,87 +1294,96 @@ function stepperRow(name, label, value, ic, { min = 0, max = 300, step = 5 } = {
     <div class="row-main"><div class="row-title">${label}</div></div>
     <div class="row-detail" id="v-${name}">${value}</div>
     <div class="stepper" data-name="${name}" data-min="${min}" data-max="${max}" data-step="${step}">
-      <button type="button" data-d="-1" aria-label="减少">−</button><button type="button" data-d="1" aria-label="增加">+</button>
+      <button type="button" data-d="-1" aria-label="${t('decrease')}">−</button><button type="button" data-d="1" aria-label="${t('increase')}">+</button>
     </div>
   </div>`;
 }
 
 function settingsView() {
-  setNav({ title: '设置' });
+  setNav({ title: t('tab.settings') });
   const s = state.settings;
+  const langPref = local.get('lang', 'auto');
   const standalone = window.navigator.standalone || matchMedia('(display-mode: standalone)').matches;
+  const langNames = { zh: '中文', en: 'English' };
   $app.innerHTML = `
-    ${largeTitle('设置')}
+    ${largeTitle(t('tab.settings'))}
     <section class="section">
-      <div class="section-header">每日学习量</div>
+      <div class="section-header">${t('set.daily')}</div>
       <div class="list">
-        ${stepperRow('newPerDay', '新词', s.newPerDay, icon('sparkle', 'blue'))}
-        ${stepperRow('articleNewPerDay', '新冠词卡', s.articleNewPerDay, stripesIcon)}
-        ${stepperRow('spellNewPerDay', '新拼写卡', s.spellNewPerDay, icon('pencil', 'orange'))}
+        ${stepperRow('newPerDay', t('set.new'), s.newPerDay, icon('sparkle', 'blue'))}
+        ${stepperRow('articleNewPerDay', t('set.newArticle'), s.articleNewPerDay, stripesIcon)}
+        ${stepperRow('spellNewPerDay', t('set.newSpell'), s.spellNewPerDay, icon('pencil', 'orange'))}
       </div>
-      <div class="section-footer">冠词卡在学过词义之后出现；拼写卡要等词义记牢才出现。</div>
+      <div class="section-footer">${t('set.dailyFoot')}</div>
     </section>
 
     <section class="section">
-      <div class="section-header">复习</div>
+      <div class="section-header">${t('set.review')}</div>
       <div class="list">
-        <label class="row has-icon field">${icon('target', 'indigo')}<span style="width:auto;flex:1">目标记忆率</span>
+        <label class="row has-icon field">${icon('target', 'indigo')}<span style="width:auto;flex:1">${t('set.retention')}</span>
           <select id="retention">
-            ${[
-              [0.85, '85%'],
-              [0.9, '90%'],
-              [0.95, '95%'],
-            ]
-              .map(([v, l]) => `<option value="${v}" ${Math.abs(v - s.retention) < 0.001 ? 'selected' : ''}>${l}</option>`)
+            ${[0.85, 0.9, 0.95]
+              .map((v) => `<option value="${v}" ${Math.abs(v - s.retention) < 0.001 ? 'selected' : ''}>${Math.round(v * 100)}%</option>`)
               .join('')}
           </select>${ICON.chev}
         </label>
-        <label class="row has-icon">${icon('pencil', 'green')}<div class="row-main">拼写练习</div><input type="checkbox" class="switch" id="spell" ${s.spell ? 'checked' : ''}></label>
-        <label class="row has-icon">${icon('speaker', 'red')}<div class="row-main">自动朗读</div><input type="checkbox" class="switch" id="autoSpeak" ${s.autoSpeak ? 'checked' : ''}></label>
+        <label class="row has-icon">${icon('pencil', 'green')}<div class="row-main">${t('set.spell')}</div><input type="checkbox" class="switch" id="spell" ${s.spell ? 'checked' : ''}></label>
+        <label class="row has-icon">${icon('speaker', 'red')}<div class="row-main">${t('set.autoSpeak')}</div><input type="checkbox" class="switch" id="autoSpeak" ${s.autoSpeak ? 'checked' : ''}></label>
       </div>
-      <div class="section-footer">90% 适合平时；考前冲刺可以调到 95%，复习量大约翻倍。</div>
+      <div class="section-footer">${t('set.reviewFoot')}</div>
     </section>
 
     <section class="section">
-      <div class="section-header">同步</div>
+      <div class="list">
+        <label class="row has-icon field">${icon('globe', 'blue')}<span style="width:auto;flex:1">${t('set.language')}</span>
+          <select id="lang">
+            <option value="auto" ${langPref === 'auto' ? 'selected' : ''}>${t('lang.auto')}</option>
+            ${LANGS.map((l) => `<option value="${l}" ${langPref === l ? 'selected' : ''}>${langNames[l]}</option>`).join('')}
+          </select>${ICON.chev}
+        </label>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">${t('set.sync')}</div>
       <div class="list">
         <div id="syncInfo">${syncStatusHTML()}</div>
         <form id="tokenForm" class="row has-icon">${icon('key', 'gray')}
-          <input class="bare" type="password" id="token" placeholder="同步口令" value="${esc(sync.token)}" autocomplete="off" enterkeyhint="go">
-          <button class="btn small">${sync.token ? '更新' : '连接'}</button>
+          <input class="bare" type="password" id="token" placeholder="${esc(t('set.tokenPh'))}" value="${esc(sync.token)}" autocomplete="off" enterkeyhint="go">
+          <button class="btn small" id="tokenBtn"></button>
         </form>
-        ${sync.token ? '<button class="row action" id="syncNow">立即同步</button>' : ''}
+        ${sync.token ? `<button class="row action" id="syncNow">${t('set.syncNow')}</button>` : ''}
+        ${sync.token && navigator.clipboard ? `<button class="row action" id="copyToken">${t('set.copyToken')}</button>` : ''}
       </div>
-      <div class="section-footer">三台设备填同一个口令。数据先存在本机，联网后自动同步；两台设备改了同一个词，以后改的为准。</div>
+      <div class="section-footer">${t('set.syncFoot')}</div>
     </section>
 
     ${
       standalone
         ? ''
         : `<section class="section">
-      <div class="section-header">添加到主屏幕</div>
+      <div class="section-header">${t('set.homeScreen')}</div>
       <div class="list">
-        ${row({ title: 'iPhone / iPad', sub: 'Safari 点“分享”，选“添加到主屏幕”' })}
-        ${row({ title: 'Mac', sub: 'Safari 菜单“文件” → “添加到程序坞”' })}
+        ${row({ title: 'iPhone / iPad', sub: t('set.homeIos') })}
+        ${row({ title: 'Mac', sub: t('set.homeMac') })}
       </div>
-      <div class="section-footer">添加后打开就像独立 App，没网也能用。长期不打开的网站，Safari 会清掉它的本地数据，添加到主屏幕后就不会被清。</div>
+      <div class="section-footer">${t('set.homeFoot')}</div>
     </section>`
     }
 
     <section class="section">
-      <div class="section-header">数据</div>
+      <div class="section-header">${t('set.data')}</div>
       <div class="list">
-        <button class="row action has-icon" id="exportJson">${icon('up', 'blue')}<div class="row-main" style="color:var(--label)">导出备份</div></button>
-        <label class="row action has-icon">${icon('down', 'green')}<div class="row-main" style="color:var(--label)">导入备份</div><input type="file" id="importJson" accept="application/json,.json" hidden></label>
-        <button class="row action has-icon" id="exportCsv">${icon('book', 'gray')}<div class="row-main" style="color:var(--label)">导出 CSV</div></button>
+        <button class="row action has-icon" id="exportJson">${icon('up', 'blue')}<div class="row-main" style="color:var(--label)">${t('set.exportBackup')}</div></button>
+        <label class="row action has-icon">${icon('down', 'green')}<div class="row-main" style="color:var(--label)">${t('set.importBackup')}</div><input type="file" id="importJson" accept="application/json,.json" hidden></label>
+        <button class="row action has-icon" id="exportCsv">${icon('book', 'gray')}<div class="row-main" style="color:var(--label)">${t('set.exportCsv')}</div></button>
       </div>
     </section>
     <section class="section">
-      <div class="list"><button class="row destructive center" id="wipe">清空这台设备上的数据</button></div>
-      <div class="section-footer" style="text-align:center">Mac 快捷键：空格 翻面 / 良好 · 1–4 评分 · 冠词 1 2 3 · R 朗读 · Z 撤销</div>
+      <div class="list"><button class="row destructive center" id="wipe">${t('set.wipe')}</button></div>
+      <div class="section-footer" style="text-align:center">${t('set.shortcuts')}</div>
     </section>`;
 
-  // 步进器
   let saveTimer;
   $$('.stepper').forEach((st) =>
     st.addEventListener('click', (e) => {
@@ -1287,23 +1400,51 @@ function settingsView() {
   $('#retention').addEventListener('change', (e) => S.saveSettings({ retention: +e.target.value }));
   $('#spell').addEventListener('change', (e) => S.saveSettings({ spell: e.target.checked }));
   $('#autoSpeak').addEventListener('change', (e) => S.saveSettings({ autoSpeak: e.target.checked }));
+  $('#lang').addEventListener('change', (e) => {
+    local.set('lang', e.target.value);
+    applyLang();
+    renderSync();
+    route();
+  });
 
+  // With an empty field the button pastes from the clipboard, so moving the password to
+  // another device is copy on one, paste on the other.
+  const tokenInput = $('#token');
+  const tokenBtn = $('#tokenBtn');
+  const canPaste = Boolean(navigator.clipboard?.readText);
+  const updateTokenBtn = () => {
+    const v = tokenInput.value.trim();
+    tokenBtn.textContent = !v && canPaste ? t('set.paste') : sync.token ? t('set.update') : t('set.connect');
+  };
+  updateTokenBtn();
+  tokenInput.addEventListener('input', updateTokenBtn);
   $('#tokenForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const btn = e.target.querySelector('button');
-    btn.disabled = true;
+    if (!tokenInput.value.trim() && canPaste) {
+      try {
+        tokenInput.value = (await navigator.clipboard.readText()).trim();
+      } catch {
+        return;
+      }
+      if (!tokenInput.value) return;
+    }
+    tokenBtn.disabled = true;
     try {
-      await setToken($('#token').value);
-      toast(sync.token ? '已连接' : '已关闭同步');
+      await setToken(tokenInput.value);
+      toast(sync.token ? t('set.connected') : t('set.disconnected'));
       route();
     } catch (err) {
-      toast(err.message, 3500);
-      btn.disabled = false;
+      toast(t(`sync.err.${err.code || 'server'}`), 3500);
+      tokenBtn.disabled = false;
     }
+  });
+  $('#copyToken')?.addEventListener('click', async () => {
+    await navigator.clipboard.writeText(sync.token);
+    toast(t('set.tokenCopied'), 3500);
   });
   $('#syncNow')?.addEventListener('click', async () => {
     await syncNow();
-    toast(sync.status === 'error' ? sync.error : '已同步');
+    toast(sync.status === 'error' ? syncError() : t('sync.idle'));
   });
 
   const download = (name, text, type) => {
@@ -1319,7 +1460,7 @@ function settingsView() {
   );
   $('#exportCsv').addEventListener('click', () => {
     const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [['article', 'lemma', 'plural', 'pos', 'forms', 'zh', 'example', 'exampleZh', 'source', 'tags', 'status']];
+    const rows = [['article', 'lemma', 'plural', 'pos', 'forms', 'meaning', 'example', 'example_translation', 'source', 'tags', 'status']];
     for (const w of S.liveWords()) {
       rows.push([w.article, w.lemma, w.plural, w.pos, w.forms, w.zh, w.example, w.exampleZh, w.source, (w.tags || []).join(';'), S.wordStatus(w)]);
     }
@@ -1330,27 +1471,24 @@ function settingsView() {
     if (!file) return;
     try {
       const r = await S.importData(JSON.parse(await file.text()));
-      toast(`导入了 ${r.words} 个词、${r.logs} 条记录`);
-    } catch (err) {
-      toast(err.message, 3500);
+      toast(t('set.imported', { w: r.words, l: r.logs }));
+    } catch {
+      toast(t('set.notBackup'), 3500);
     }
   });
   $('#wipe').addEventListener('click', async () => {
-    const msg = sync.token
-      ? '清空这台设备上的词库和进度？服务器上的数据不受影响，重新连接后会同步回来。'
-      : '还没开同步，清空后数据就找不回了。确定清空？';
-    if (!confirm(msg)) return;
+    if (!confirm(sync.token ? t('set.wipeSynced') : t('set.wipeLocal'))) return;
     await S.wipeLocal();
     location.reload();
   });
 }
 
-// 启动
 async function boot() {
+  applyLang();
   try {
     await S.load();
   } catch (err) {
-    $app.innerHTML = `<p class="empty">本地数据库打不开：${esc(err.message)}。如果是无痕浏览模式，请换成普通窗口。</p>`;
+    $app.innerHTML = `<p class="empty">${esc(t('boot.dbError', { e: err.message }))}</p>`;
     return;
   }
   await initSync();
@@ -1361,10 +1499,34 @@ async function boot() {
   renderSync();
   window.addEventListener('hashchange', route);
   route();
+  window.addEventListener('offline', () => sync.token && toast(t('sync.offlineToast'), 3500));
   navigator.storage?.persist?.().catch(() => {});
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  }
+  registerServiceWorker();
+  try {
+    if (sessionStorage.getItem('vocab-de:updated')) {
+      sessionStorage.removeItem('vocab-de:updated');
+      toast(t('app.updated'));
+    }
+  } catch {}
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || location.protocol !== 'https:') return;
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  navigator.serviceWorker
+    .register('sw.js')
+    .then((reg) => {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
+    })
+    .catch(() => {});
+  // The first install also fires controllerchange; only a replaced worker means a new release.
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) return;
+    updateReady = true;
+    applyUpdateIfIdle();
+  });
 }
 
 boot();

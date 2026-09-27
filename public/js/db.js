@@ -1,4 +1,4 @@
-// IndexedDB 的最小封装。stores: words / logs（keyPath id），kv（keyPath key）
+// Minimal promise wrapper around IndexedDB. Stores: words, logs (keyPath id), kv (keyPath key).
 
 const NAME = 'vocab-de';
 const VERSION = 1;

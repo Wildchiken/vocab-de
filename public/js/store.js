@@ -3,8 +3,7 @@ import { newCard, schedule, previewAll, dayStart, DAY, MIN } from './fsrs.js';
 import { ARTICLES } from './german.js';
 
 export const CARD_TYPES = ['meaning', 'article', 'spell'];
-export const TYPE_LABEL = { meaning: '释义', article: '冠词', spell: '拼写' };
-export const SOURCES = { exam: '考试词表', book: '课本', daily: '生词', other: '其他' };
+export const SOURCES = ['exam', 'book', 'daily', 'other'];
 
 export const DEFAULT_SETTINGS = {
   newPerDay: 20,
@@ -21,6 +20,7 @@ export const state = {
   logs: [],
   settings: { ...DEFAULT_SETTINGS },
   settingsDirty: false,
+  extraNew: { day: 0, n: 0 }, // "study more" on top of today's limit, per device
 };
 
 const listeners = new Set();
@@ -31,11 +31,13 @@ const uid = () =>
   crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
 
 export async function load() {
-  const [words, logs, settings] = await Promise.all([
+  const [words, logs, settings, extraNew] = await Promise.all([
     idb.all('words'),
     idb.all('logs'),
     idb.getKV('settings', null),
+    idb.getKV('extraNew', null),
   ]);
+  if (extraNew) state.extraNew = extraNew;
   state.words = new Map(words.map((w) => [w.id, w]));
   state.logs = logs.sort((a, b) => a.ts - b.ts);
   if (settings) {
@@ -50,7 +52,6 @@ function params() {
   return { retention: state.settings.retention };
 }
 
-// 词条
 export function makeWord(f) {
   const now = Date.now();
   return {
@@ -122,7 +123,6 @@ export async function markSettingsClean(updatedAt) {
   await idb.setKV('settings', { value: state.settings, dirty: false });
 }
 
-// 卡片
 export function getCard(w, type) {
   return w.cards[type] || newCard();
 }
@@ -157,24 +157,35 @@ function scan(types, now) {
     }
   }
   const s = state.settings;
-  const limits = { meaning: s.newPerDay, article: s.articleNewPerDay, spell: s.spell ? s.spellNewPerDay : 0 };
+  const extra = state.extraNew.day === today ? state.extraNew.n : 0;
+  const limits = {
+    meaning: s.newPerDay + extra,
+    article: s.articleNewPerDay + extra,
+    spell: s.spell ? s.spellNewPerDay : 0,
+  };
   const newLeft = {};
   for (const t of CARD_TYPES) newLeft[t] = Math.max(0, Math.min(news[t].length, limits[t] - introduced[t]));
   return { news, reviews, learning, newLeft, introduced };
 }
 
 export function todayCounts(now = Date.now()) {
-  const { reviews, learning, newLeft } = scan(CARD_TYPES, now);
+  const { reviews, learning, newLeft, news } = scan(CARD_TYPES, now);
   const due = { meaning: 0, article: 0, spell: 0 };
   for (const r of reviews) due[r.t]++;
   for (const l of learning) if (l.c.due <= now + 20 * MIN) due[l.t]++;
   const total = due.meaning + due.article + due.spell + newLeft.meaning + newLeft.article + newLeft.spell;
-  return { due, newLeft, total };
+  return { due, newLeft, total, unseen: news.meaning.length };
+}
+
+export async function addExtraNew(n, now = Date.now()) {
+  const day = dayStart(now);
+  state.extraNew = { day, n: (state.extraNew.day === day ? state.extraNew.n : 0) + n };
+  await idb.setKV('extraNew', state.extraNew);
 }
 
 const NEW_ORDER = ['article', 'meaning', 'spell'];
 
-/** 挑下一张卡。session: { types, sinceNew, lastWordId } */
+// session: { types, sinceNew, lastWordId }
 export function pickNext(session, now = Date.now()) {
   const { news, reviews, learning, newLeft } = scan(session.types, now);
   const notLast = (x) => x.w.id !== session.lastWordId;
@@ -206,7 +217,7 @@ export function pickNext(session, now = Date.now()) {
     return fresh;
   }
   if (learnDue[0]) return learnDue[0];
-  // 没有别的了：提前做 20 分钟内到期的学习卡
+  // Nothing else left: show learning cards due within the next 20 minutes early.
   const soon = learning.filter((l) => l.c.due <= now + 20 * MIN).sort((a, b) => a.c.due - b.c.due);
   return soon.find(notLast) || soon[0] || null;
 }
@@ -215,7 +226,7 @@ export function preview(w, type, now = Date.now()) {
   return previewAll(getCard(w, type), now, params());
 }
 
-/** 评分并保存。返回撤销用的快照 */
+// Returns a snapshot for undo.
 export async function answer(w, type, rating, elapsedMs, now = Date.now()) {
   const before = JSON.parse(JSON.stringify(w));
   const prev = getCard(w, type);
@@ -245,7 +256,7 @@ export async function undo(snap) {
   return w;
 }
 
-/** 冠词自由练习的抽词：已学过的名词，易错的更常出现 */
+// Weighted random pick for free article practice: frequently missed nouns come up more.
 export function drillPool() {
   return liveWords().filter((w) => !w.suspended && eligible(w, 'article'));
 }
@@ -264,7 +275,6 @@ export function pickDrill(pool, recent) {
   return list[list.length - 1];
 }
 
-// 统计
 export function wordStatus(w) {
   if (w.suspended) return 'suspended';
   const m = getCard(w, 'meaning');
@@ -273,7 +283,7 @@ export function wordStatus(w) {
   return m.s >= 21 ? 'mature' : 'young';
 }
 
-export const STATUS_LABEL = { new: '未学', learning: '学习中', young: '巩固中', mature: '已掌握', suspended: '已暂停' };
+export const STATUSES = ['new', 'learning', 'young', 'mature', 'suspended'];
 
 export function stats(now = Date.now()) {
   const today = dayStart(now);
@@ -281,7 +291,6 @@ export function stats(now = Date.now()) {
   const byStatus = { new: 0, learning: 0, young: 0, mature: 0, suspended: 0 };
   for (const w of words) byStatus[wordStatus(w)]++;
 
-  // 只遍历一次复习记录
   const since30 = now - 30 * DAY;
   const firstDay = today - 13 * DAY;
   const perDay = Array.from({ length: 14 }, () => 0);
@@ -342,7 +351,6 @@ export function stats(now = Date.now()) {
   };
 }
 
-// 备份
 export function exportData() {
   return {
     app: 'vocab-de',
@@ -366,7 +374,7 @@ function isWordRecord(w) {
 }
 
 export async function importData(data) {
-  if (data?.app !== 'vocab-de') throw new Error('不是本应用导出的备份文件');
+  if (data?.app !== 'vocab-de') throw Object.assign(new Error('not a vocab-de backup'), { code: 'notBackup' });
   const words = [];
   for (const w of Array.isArray(data.words) ? data.words : []) {
     if (!isWordRecord(w)) continue;

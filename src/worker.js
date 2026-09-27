@@ -1,5 +1,3 @@
-// 静态页面由 Workers Assets 直接提供，只有 /api/* 会进到这里。
-
 const PULL_LIMIT = 1000;
 const MAX_CHANGES = 500;
 const MAX_BODY = 5 * 1024 * 1024;
@@ -25,7 +23,7 @@ export default {
     } catch (err) {
       if (err instanceof HttpError) return json({ error: err.message }, err.status);
       console.error(err);
-      return json({ error: '服务器错误' }, 500);
+      return json({ error: 'server error' }, 500);
     }
   },
 };
@@ -38,11 +36,11 @@ function json(body, status = 200) {
 }
 
 async function readJson(request) {
-  if (Number(request.headers.get('content-length')) > MAX_BODY) throw new HttpError(413, '请求太大');
+  if (Number(request.headers.get('content-length')) > MAX_BODY) throw new HttpError(413, 'request too large');
   try {
     return await request.json();
   } catch {
-    throw new HttpError(400, '请求格式不对');
+    throw new HttpError(400, 'invalid JSON');
   }
 }
 
@@ -54,7 +52,7 @@ class HttpError extends Error {
 }
 
 async function authorized(request, env) {
-  if (!env.SYNC_TOKEN) throw new HttpError(500, '服务器没有设置 SYNC_TOKEN');
+  if (!env.SYNC_TOKEN) throw new HttpError(500, 'SYNC_TOKEN is not set');
   const given = (request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
   const enc = new TextEncoder();
   const a = enc.encode(given);
@@ -77,11 +75,11 @@ async function ensureSchema(env) {
   schemaReady = true;
 }
 
-// 同步：先写入客户端的改动（按 updated_at 后写者胜），再返回 seq > since 的记录
+// Applies client changes (last write wins by updated_at), then returns rows with seq > since.
 async function sync(env, body) {
   const since = Number(body.since) || 0;
   const changes = Array.isArray(body.changes) ? body.changes : [];
-  if (changes.length > MAX_CHANGES) throw new HttpError(413, `一次最多 ${MAX_CHANGES} 条改动`);
+  if (changes.length > MAX_CHANGES) throw new HttpError(413, `at most ${MAX_CHANGES} changes per request`);
 
   const upsert = env.DB.prepare(
     `INSERT INTO records (kind, id, updated_at, deleted, data, seq)

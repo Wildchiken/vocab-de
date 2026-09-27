@@ -1,4 +1,4 @@
-// 生成 PNG 图标（Safari 的主屏幕图标不支持 SVG）。不依赖任何图像库。
+// Writes the PNG app icons (Safari needs PNG for the Home Screen). No image library needed.
 import { deflateSync } from 'node:zlib';
 import { writeFileSync } from 'node:fs';
 
@@ -21,7 +21,7 @@ function chunk(type, data) {
   return Buffer.concat([len, td, crc]);
 }
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-// iOS 自己会切圆角，这里铺满底色
+// iOS rounds the corners itself, so the background fills the square.
 function render(size) {
   const bg = hex('#1d1e22');
   const bars = [

@@ -1,24 +1,26 @@
 # vocab-de
 
-背德语单词用的网页应用，在 iPhone、iPad、Mac 的 Safari 上使用，配置同步口令后可在多台设备间同步。后端使用 Cloudflare Workers + D1。
+English | [中文](README.zh-CN.md)
 
-## 功能
+A web app for learning German vocabulary in Safari on iPhone, iPad and Mac, with progress synced across devices. The interface is available in English and Chinese, and you can write meanings in any language. The backend runs on Cloudflare Workers and D1 and fits in the free tier for personal use.
 
-- 每个词有三种卡片，各自安排复习时间：
-  - 释义：看德语回想中文，自己评分
-  - 冠词：只显示名词，选 der / die / das，按对错和反应时间自动评分
-  - 拼写：看中文写德语，名词要带冠词；词义记牢以后才会出现
-- 复习调度使用 [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm)，目标记忆率可选 85% / 90% / 95%
-- 冠词练习答错时会提示词尾规律（-ung → die、-chen → das 等），复合词会指出最后一部分（Haustür → die Tür），规律不适用的词会标成例外
-- 冠词自由练习：从学过的名词里抽，错得多的出现得多
-- 粘贴导入，能识别常见词表写法：`der Tisch, -e 桌子`、`die Mutter, ¨`、`gehen, ging, ist gegangen`、Goethe 词表、Excel 两列；复数标记会展开成完整形式
-- 离线可用，联网后自动同步
-- 界面参考 iOS 26：悬浮标签栏，宽屏时换成侧边栏；支持深色模式、系统字号、减弱动态效果
-- Safari 自带语音朗读，Mac 上有快捷键
+## Features
 
-## 部署
+- Every word gets three kinds of cards, each scheduled on its own:
+  - Meaning: see the German word, recall what it means, rate yourself
+  - Article: see only the noun and pick der / die / das; graded automatically by correctness and speed
+  - Spelling: see the meaning and type the German (nouns with their article); unlocked once the meaning is well learned
+- Scheduling uses [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm), with a target recall of 85%, 90% or 95%
+- When you miss an article, you get the relevant ending rule (-ung → die, -chen → das, ...), the head noun of a compound (Haustür → die Tür), or a note that the word is an exception
+- Free article practice that favors the nouns you get wrong most
+- Paste import that understands common list formats: `der Tisch, -e - table`, `die Mutter, ¨ - mother`, `gehen, ging, ist gegangen = to go`, Goethe word lists, and two columns copied from a spreadsheet. Plural markers are expanded to full forms
+- Works offline: every release is precached, updates install in the background and apply when you are not in the middle of a session. Changes made offline sync when you are back online, with automatic retries
+- iOS 26 style interface: floating tab bar that becomes a sidebar on wide screens, dark mode, Dynamic Type, Reduce Motion and Reduce Transparency
+- German text-to-speech using the voices built into Safari, keyboard shortcuts on Mac
 
-需要 Node.js 22 以上和一个 Cloudflare 账号。
+## Deploy
+
+You need Node.js 22 or later and a Cloudflare account.
 
 ```bash
 npm install
@@ -26,24 +28,41 @@ npx wrangler login
 npx wrangler d1 create vocab-de
 ```
 
-把输出里的 `database_id` 填进 `wrangler.jsonc`，再设置同步口令并部署：
+Put the `database_id` from the output into `wrangler.jsonc`, then set a sync password and deploy:
 
 ```bash
 npx wrangler secret put SYNC_TOKEN
 npx wrangler deploy
 ```
 
-口令建议用随机字符串，比如 `openssl rand -hex 16`。数据表会在第一次请求时自动创建。
+Use a random string for the password, for example `openssl rand -hex 16`. The database table is created on the first request. Each deploy regenerates `public/sw.js` with a content hash, so clients update automatically.
 
-## 在设备上使用
+## Using it on your devices
 
-1. Safari 打开部署后的地址
-2. 设置 → 同步，填入 `SYNC_TOKEN`
-3. 导入词表，开始复习
+1. Open the deployed URL in Safari and add it to your Home Screen (iPhone / iPad: Share → Add to Home Screen; Mac: File → Add to Dock)
+2. Open the app from the Home Screen or Dock, go to Settings → Sync and enter your `SYNC_TOKEN`
+3. On your next device, tap "Copy password for another device" on the first one, then "Paste" in Settings on the new one. With Universal Clipboard this works straight from Mac to iPhone
 
-普通 Safari 标签页即可使用，添加到主屏幕是可选项。首次联网加载后可离线复习，恢复网络后同步。本地数据可能因清理网站数据或浏览器回收存储而丢失；重要进度请及时同步并导出备份。
+Do step 2 inside the installed app, not in Safari: Home Screen apps keep their data separate from Safari. Installed apps also work offline and are not affected by Safari clearing data for sites you have not visited in a while.
 
-## 本地开发
+The interface follows your system language. You can change it under Settings → Language.
+
+## Import format
+
+One word per line. Separate the German from its meaning with a tab, ` - `, ` = ` or `: `. Chinese meanings can follow the word directly.
+
+```
+der Tisch, -e - table
+die Mutter, ¨ - mother
+der Lehrer, - teacher
+das Kind (-er) - child
+gehen, ging, ist gegangen = to go
+Zeitung
+```
+
+A lone `-` after a comma means "plural same as singular", not a separator. Lines without a meaning or article can be completed in the import preview.
+
+## Development
 
 ```bash
 echo 'SYNC_TOKEN=dev-token-123' > .dev.vars
@@ -51,22 +70,24 @@ npm run dev
 npm test
 ```
 
-## 目录
+## Layout
 
 ```
-public/            前端，纯 HTML/CSS/ES 模块，无需构建
-  js/fsrs.js       FSRS 调度
-  js/german.js     词条解析、复数推导、冠词规律、拼写比对
-  js/store.js      IndexedDB 存储、选卡、统计
-  js/sync.js       增量同步
-  js/app.js        界面
-  sw.js            离线缓存
-src/worker.js      同步接口 /api/sync
-test/              单元测试（node --test）
+public/            Front end: plain HTML, CSS and ES modules, no bundler
+  js/fsrs.js       FSRS scheduler
+  js/german.js     Parsing, plural expansion, article rules, spelling check
+  js/store.js      IndexedDB storage, card selection, statistics
+  js/sync.js       Incremental sync
+  js/i18n.js       English and Chinese strings
+  js/app.js        UI
+src/worker.js      Sync API (/api/sync)
+src/sw.js          Service worker template (built into public/sw.js)
+scripts/           Build helpers
+test/              Unit tests (node --test)
 ```
 
-同步方式：每条记录带更新时间，服务器按“后写入的为准”合并，客户端按服务器序号增量拉取。两台设备离线时修改了同一个词，按记录的更新时间选择较新版本。设备时钟不一致可能影响合并结果。复习记录按独立 ID 同步。
+Sync: every record carries an update time, the server keeps the most recent write, and clients pull changes by a server sequence number. If two offline devices change the same word, the version with the newer update time wins, so device clocks that are far off can affect the result. Review logs sync by their own IDs.
 
-## 许可证
+## License
 
 [MIT](LICENSE)

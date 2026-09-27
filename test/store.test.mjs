@@ -1,7 +1,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { state, makeWord, pickNext, todayCounts, DEFAULT_SETTINGS } from '../public/js/store.js';
-import { MIN, DAY } from '../public/js/fsrs.js';
+import { MIN, DAY, dayStart } from '../public/js/fsrs.js';
 
 const now = new Date('2026-09-27T10:00:00').getTime();
 
@@ -51,4 +51,14 @@ test('suspended and deleted words are skipped', () => {
   b.deleted = true;
   setWords([a, b]);
   assert.equal(pickNext(session(), now), null);
+});
+
+test('extra new words raise today\'s limit only for today', () => {
+  setWords([noun('A', 'der', 1), noun('B', 'die', 2), noun('C', 'das', 3), noun('D', 'der', 4)]);
+  assert.equal(todayCounts(now).newLeft.meaning, 2);
+  state.extraNew = { day: dayStart(now), n: 2 };
+  assert.equal(todayCounts(now).newLeft.meaning, 4);
+  state.extraNew = { day: dayStart(now) - DAY, n: 2 };
+  assert.equal(todayCounts(now).newLeft.meaning, 2);
+  state.extraNew = { day: 0, n: 0 };
 });

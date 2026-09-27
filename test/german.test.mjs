@@ -44,6 +44,23 @@ test('parse lines', () => {
   assert.equal(parseLine('   '), null);
 });
 
+test('parse lines with non-Chinese meanings', () => {
+  let p = parseLine('der Tisch, -e - table');
+  assert.deepEqual([p.article, p.lemma, p.plural, p.zh], ['der', 'Tisch', 'Tische', 'table']);
+  p = parseLine('der Lehrer, - teacher');
+  assert.deepEqual([p.plural, p.zh], ['Lehrer', 'teacher']);
+  p = parseLine('gehen, ging, ist gegangen = to go');
+  assert.deepEqual([p.lemma, p.forms, p.zh], ['gehen', 'ging, ist gegangen', 'to go']);
+  p = parseLine('die Zeitung\tnewspaper');
+  assert.deepEqual([p.article, p.lemma, p.zh], ['die', 'Zeitung', 'newspaper']);
+  p = parseLine('Zeitung: newspaper');
+  assert.deepEqual([p.lemma, p.zh], ['Zeitung', 'newspaper']);
+  p = parseLine('sich freuen (über) - to be glad (about)');
+  assert.deepEqual([p.lemma, p.zh], ['sich freuen (über)', 'to be glad (about)']);
+  p = parseLine('das Kind (-er) - child');
+  assert.deepEqual([p.plural, p.zh], ['Kinder', 'child']);
+});
+
 test('spelling', () => {
   const w = { pos: 'noun', article: 'die', lemma: 'Tür' };
   assert.equal(checkSpelling('die Tür', w).result, 'exact');
