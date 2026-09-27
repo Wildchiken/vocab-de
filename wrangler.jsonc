@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "vocab-de",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "vocab-de",
+      // 部署前运行 `npx wrangler d1 create vocab-de`，把输出的 database_id 填到这里
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ]
+  // 同步口令用命令设置，不要写在这里：npx wrangler secret put SYNC_TOKEN
+}

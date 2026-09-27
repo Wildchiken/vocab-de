@@ -1,0 +1,13 @@
+node_modules/
+.wrangler/
+.dev.vars
+.DS_Store
+.env
+.env.*
+.dev.vars.*
+!.dev.vars.example
+*.log
+.claude/
+.codex/
+.gemini/
+CLAUDE.md

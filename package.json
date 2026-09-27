@@ -1,0 +1,19 @@
+{
+  "name": "vocab-de",
+  "version": "1.0.0",
+  "private": true,
+  "description": "德语背单词：FSRS 间隔重复、冠词专练，Safari 三端同步",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node --test test/"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
