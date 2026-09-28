@@ -15,7 +15,7 @@ import {
 import { dayStart, DAY } from './fsrs.js';
 import { t, fmtIvl, locale, detectLang, setLang, getLang, LANGS } from './i18n.js';
 import { sampleWords } from './sample.js';
-import { itemsFromFile } from './importer.js';
+import { itemsFromFile, toCSV, TEMPLATE_HEADER } from './importer.js';
 import { speak, ttsAvailable } from './tts.js';
 
 const $app = document.getElementById('app');
@@ -165,8 +165,37 @@ function download(name, text, type) {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+const stamp = () => new Date().toISOString().slice(0, 10);
+
+function exportWordList() {
+  const rows = [[...TEMPLATE_HEADER, 'status']];
+  for (const w of S.liveWords()) {
+    rows.push([w.article, w.lemma, w.plural, w.pos, w.forms, w.zh, w.example, w.exampleZh, (w.tags || []).join(';'), S.wordStatus(w)]);
+  }
+  download(`vocab-de-${stamp()}.csv`, toCSV(rows), 'text/csv');
+}
+
+// A filled-in example of every column, in the interface language.
+function downloadTemplate() {
+  const en = getLang() === 'en';
+  const lesson = en ? 'Lesson 1' : '第1课';
+  const rows = [
+    TEMPLATE_HEADER,
+    ['der', 'Tisch', 'Tische', 'noun', '', en ? 'table' : '桌子', 'Der Tisch ist neu.', en ? 'The table is new.' : '这张桌子是新的。', lesson],
+    ['die', 'Stadt', '¨-e', 'noun', '', en ? 'city' : '城市', '', '', lesson],
+    ['das', 'Wasser', '—', 'noun', '', en ? 'water' : '水', '', '', lesson],
+    ['', 'gehen', '', 'verb', 'ging, ist gegangen', en ? 'to go' : '走；去', 'Ich gehe nach Hause.', en ? 'I am going home.' : '我回家。', lesson],
+    ['', 'auf jeden Fall', '', 'phrase', '', en ? 'in any case' : '无论如何', '', '', lesson],
+    ['', 'Wie geht es dir?', '', 'sentence', '', en ? 'How are you?' : '你好吗？', '', '', lesson],
+  ];
+  download(en ? 'vocab-de-template.csv' : 'vocab-de-模板.csv', toCSV(rows), 'text/csv');
+}
+
+// A file chosen in Settings is read on the add screen, where it can be checked first.
+let pendingFile = null;
+
 async function exportBackup() {
-  download(`vocab-de-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(S.exportData()), 'application/json');
+  download(`vocab-de-${stamp()}.json`, JSON.stringify(S.exportData()), 'application/json');
   await S.markBackedUp();
 }
 
@@ -275,6 +304,7 @@ const routes = {
   add: addView,
   word: editView,
   practice: practiceView,
+  formats: formatsView,
   stats: statsView,
   settings: settingsView,
 };
@@ -313,7 +343,7 @@ function route() {
 
 // A new release is applied by reloading, but never in the middle of a session or while typing.
 const STUDY_VIEWS = ['study', 'article', 'practice'];
-const SAFE_TO_RELOAD = ['home', 'words', 'stats', 'settings'];
+const SAFE_TO_RELOAD = ['home', 'words', 'stats', 'settings', 'formats'];
 let updateReady = false;
 function applyUpdateIfIdle() {
   if (!updateReady || !SAFE_TO_RELOAD.includes(current)) return;
@@ -1345,6 +1375,19 @@ function editView(id, from) {
 
 const PREVIEW_LIMIT = 200;
 
+const COLUMN_LABEL = {
+  lemma: 'edit.german',
+  zh: 'edit.meaning',
+  article: 'type.article',
+  plural: 'edit.plural',
+  pos: 'edit.pos',
+  forms: 'edit.forms',
+  example: 'edit.example',
+  exampleZh: 'edit.exampleTr',
+  tags: 'edit.tags',
+};
+const columnName = (field) => t(COLUMN_LABEL[field]);
+
 function addView() {
   setNav({ title: t('add.title') });
   let items = [];
@@ -1358,20 +1401,29 @@ function addView() {
   $app.innerHTML = `
     ${largeTitle(t('add.title'))}
     <section class="section">
+      <div class="section-header">${t('add.paste')}</div>
       <div class="list">
         <div class="row">
-          <textarea class="bare lines-input" id="lines" rows="7" lang="de" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${esc(t('add.ph'))}"></textarea>
+          <textarea class="bare lines-input" id="lines" rows="6" lang="de" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="${esc(t('add.ph'))}"></textarea>
         </div>
-        <div class="row file-row" id="fileRow" hidden>
-          <span class="ic gray">${ICON.doc}</span>
-          <div class="row-main"><div class="row-title" id="fileName"></div></div>
-          <button class="x" id="clearFile" aria-label="${t('add.clearFile')}">✕</button>
-        </div>
-        <label class="row action has-icon" id="pickFile">${icon('down', 'blue')}<div class="row-main">${t('add.fromFile')}</div>
-          <input type="file" id="fileInput" accept=".txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values" hidden>
-        </label>
       </div>
       <div class="section-footer">${esc(t('add.foot'))}</div>
+    </section>
+    <section class="section">
+      <div class="section-header">${t('add.fromFile')}</div>
+      <div class="list">
+        <div class="row file-row" id="fileRow" hidden>
+          <span class="ic gray">${ICON.doc}</span>
+          <div class="row-main"><div class="row-title" id="fileName"></div><div class="row-sub" id="fileCols"></div></div>
+          <button class="x" id="clearFile" aria-label="${t('add.clearFile')}">✕</button>
+        </div>
+        <label class="row action has-icon" id="pickFile">${icon('doc', 'blue')}<div class="row-main">${t('add.pickFile')}</div>
+          <input type="file" id="fileInput" accept=".txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values" hidden>
+        </label>
+        <button class="row action has-icon" id="template">${icon('down', 'green')}<div class="row-main">${t('add.template')}</div></button>
+        ${row({ title: t('help.title'), icon: icon('book', 'gray'), href: '#formats' })}
+      </div>
+      <div class="section-footer">${esc(t('add.fileFoot'))}</div>
     </section>
     <section class="section">
       <div class="list">
@@ -1429,12 +1481,16 @@ function addView() {
   async function loadFile(f) {
     if (!f) return;
     try {
-      const { items: rows } = await itemsFromFile(f);
+      const { items: rows, columns } = await itemsFromFile(f);
       if (!rows.length) return toast(t('add.fileEmpty'), 3500);
       file = { name: f.name, items: rows };
       removed.clear();
       $('#fileRow').hidden = false;
       $('#fileName').textContent = t('add.fileLoaded', { name: f.name, n: rows.length });
+      // Say how the file was read, so a wrong column is noticed before importing.
+      $('#fileCols').textContent = columns.length
+        ? t('add.columns', { list: columns.map(columnName).join(locale().startsWith('zh') ? '、' : ', ') })
+        : t('add.byLine');
       parse();
       $('#preview').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch {
@@ -1445,6 +1501,7 @@ function addView() {
     loadFile(e.target.files[0]);
     e.target.value = '';
   });
+  $('#template').addEventListener('click', downloadTemplate);
   $('#clearFile').addEventListener('click', () => {
     file = null;
     $('#fileRow').hidden = true;
@@ -1576,6 +1633,10 @@ function addView() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  if (pendingFile) {
+    loadFile(pendingFile);
+    pendingFile = null;
+  }
   if (pendingAdd) {
     lines.value = pendingAdd;
     pendingAdd = '';
@@ -1700,6 +1761,49 @@ function practiceView() {
   }
 
   show();
+}
+
+function formatsView() {
+  setNav({ title: t('help.title'), back: { href: '#add', label: t('add.title') }, large: false });
+  const cols = [
+    ['lemma', 'help.col.lemma'],
+    ['meaning', 'help.col.meaning'],
+    ['article', 'help.col.article'],
+    ['plural', 'help.col.plural'],
+    ['pos', 'help.col.pos'],
+    ['forms', 'help.col.forms'],
+    ['example, example_translation', 'help.col.example'],
+    ['tags', 'help.col.tags'],
+  ];
+  const steps = (key) => `<ol class="steps">${t(key).split('\n').map((x) => `<li>${esc(x)}</li>`).join('')}</ol>`;
+  $app.innerHTML = `
+    <div class="spacer"></div>
+    <section class="section">
+      <div class="section-header">${t('help.pasteH')}</div>
+      <div class="list"><pre class="sample" lang="de">${esc(t('home.sample'))}</pre></div>
+      <div class="section-footer">${esc(t('help.pasteBody'))}</div>
+    </section>
+    <section class="section">
+      <div class="section-header">${t('help.csvH')}</div>
+      <div class="list">
+        ${cols.map(([name, key]) => row({ title: `<code>${esc(name)}</code>`, sub: esc(t(key)), cls: 'wrap' })).join('')}
+        <button class="row action has-icon" id="template">${icon('down', 'green')}<div class="row-main">${t('add.template')}</div></button>
+      </div>
+      <div class="section-footer">${esc(t('help.csvBody'))}</div>
+    </section>
+    <section class="section">
+      <div class="section-header">${t('help.excelH')}</div>
+      <div class="list help-text">${steps('help.excelSteps')}</div>
+    </section>
+    <section class="section">
+      <div class="section-header">${t('help.ankiH')}</div>
+      <div class="list help-text">${steps('help.ankiSteps')}</div>
+    </section>
+    <section class="section">
+      <div class="section-header">${t('help.backupH')}</div>
+      <div class="list help-text"><p>${esc(t('help.backupBody'))}</p></div>
+    </section>`;
+  $('#template').addEventListener('click', downloadTemplate);
 }
 
 function statsView() {
@@ -1889,13 +1993,22 @@ function settingsView() {
     ${standalone ? '' : installSectionHTML()}
 
     <section class="section">
-      <div class="section-header">${t('set.data')}</div>
+      <div class="section-header">${t('set.wordList')}</div>
+      <div class="list">
+        <label class="row action has-icon">${icon('down', 'green')}<div class="row-main strong">${t('set.importList')}</div><input type="file" id="importList" accept=".txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values" hidden></label>
+        <button class="row action has-icon" id="exportCsv">${icon('up', 'blue')}<div class="row-main strong">${t('set.exportCsv')}</div></button>
+        <button class="row action has-icon" id="template">${icon('doc', 'gray')}<div class="row-main strong">${t('add.template')}</div></button>
+        ${row({ title: t('help.title'), icon: icon('book', 'gray'), href: '#formats' })}
+      </div>
+      <div class="section-footer">${t('set.wordListFoot')}</div>
+    </section>
+    <section class="section">
+      <div class="section-header">${t('set.backup')}</div>
       <div class="list">
         <button class="row action has-icon" id="exportJson">${icon('up', 'blue')}<div class="row-main strong">${t('set.exportBackup')}</div></button>
         <label class="row action has-icon">${icon('down', 'green')}<div class="row-main strong">${t('set.importBackup')}</div><input type="file" id="importJson" accept="application/json,.json" hidden></label>
-        <button class="row action has-icon" id="exportCsv">${icon('book', 'gray')}<div class="row-main strong">${t('set.exportCsv')}</div></button>
       </div>
-      <div class="section-footer">${t('set.lastBackup', { time: relTime(state.lastBackup) })}</div>
+      <div class="section-footer">${t('set.backupFoot', { time: relTime(state.lastBackup) })}</div>
     </section>
     <section class="section">
       <div class="list"><button class="row destructive center" id="wipe">${t('set.wipe')}</button></div>
@@ -1994,18 +2107,15 @@ function settingsView() {
     toast(sync.status === 'error' ? syncError() : t('sync.idle'));
   });
 
-  const stamp = new Date().toISOString().slice(0, 10);
   $('#exportJson').addEventListener('click', async () => {
     await exportBackup();
     route();
   });
-  $('#exportCsv').addEventListener('click', () => {
-    const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [['article', 'lemma', 'plural', 'pos', 'forms', 'meaning', 'example', 'example_translation', 'tags', 'status']];
-    for (const w of S.liveWords()) {
-      rows.push([w.article, w.lemma, w.plural, w.pos, w.forms, w.zh, w.example, w.exampleZh, (w.tags || []).join(';'), S.wordStatus(w)]);
-    }
-    download(`vocab-de-${stamp}.csv`, '﻿' + rows.map((r) => r.map(cell).join(',')).join('\n'), 'text/csv');
+  $('#exportCsv').addEventListener('click', exportWordList);
+  $('#template').addEventListener('click', downloadTemplate);
+  $('#importList').addEventListener('change', (e) => {
+    pendingFile = e.target.files[0] || null;
+    if (pendingFile) location.hash = '#add';
   });
   $('#importJson').addEventListener('change', async (e) => {
     const file = e.target.files[0];

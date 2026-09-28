@@ -1,6 +1,6 @@
 // Reading word lists from files: plain text, TSV (e.g. Anki "Notes in Plain Text"),
 // CSV with or without a header, including this app's own CSV export.
-import { parseLine, ARTICLES } from './german.js';
+import { parseLine, pluralFromSpec, ARTICLES, NO_PLURAL } from './german.js';
 
 // Excel on Chinese Windows still saves CSV as GB18030; try UTF-8 strictly first.
 export function decodeText(bytes) {
@@ -60,6 +60,14 @@ const COLUMNS = {
   exampleZh: ['example_translation', 'example translation', '例句翻译'],
   tags: ['tags', 'tag', '标签'],
 };
+// The plural column may hold the full form, a dictionary marker (-e, ¨-er, -) or, as in this
+// app's export, a dash for "no plural".
+function plural(lemma, raw) {
+  if (!raw) return '';
+  if (raw === NO_PLURAL) return NO_PLURAL;
+  return pluralFromSpec(lemma, raw);
+}
+
 const POS = ['noun', 'verb', 'adj', 'adv', 'prep', 'conj', 'phrase', 'sentence', 'other'];
 
 function headerMap(row) {
@@ -91,12 +99,13 @@ function fromColumns(row, map) {
   const parsed = parseLine(`${lemma}\t${get('zh') || '-'}`) || {};
   const article = get('article').toLowerCase();
   const pos = get('pos').toLowerCase();
+  const word = parsed.lemma || lemma;
   return {
     ...parsed,
     raw: row.join(' ').trim(),
-    lemma: parsed.lemma || lemma,
+    lemma: word,
     article: ARTICLES.includes(article) ? article : parsed.article || '',
-    plural: get('plural') || parsed.plural || '',
+    plural: plural(word, get('plural')) || parsed.plural || '',
     pos: POS.includes(pos) ? pos : parsed.pos || '',
     forms: get('forms') || parsed.forms || '',
     zh: get('zh'),
@@ -109,7 +118,16 @@ function fromColumns(row, map) {
   };
 }
 
-/** Returns { items, format } for a file's text. */
+// Template in the same columns as the CSV export, so both directions share one format.
+export const TEMPLATE_HEADER = ['article', 'lemma', 'plural', 'pos', 'forms', 'meaning', 'example', 'example_translation', 'tags'];
+
+export function toCSV(rows) {
+  const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  // BOM so Excel opens UTF-8 with umlauts and Chinese intact
+  return '\ufeff' + rows.map((r) => r.map(cell).join(',')).join('\r\n');
+}
+
+/** Returns { items, format, columns } for a file's text; columns are the fields recognized. */
 export function itemsFromText(text, name = '') {
   const lines = text.split(/\r?\n/);
   const first = lines.find((l) => l.trim() && !l.startsWith('#')) || '';
@@ -119,14 +137,18 @@ export function itemsFromText(text, name = '') {
   if (delimiter) {
     const rows = parseCSV(lines.filter((l) => !l.startsWith('#')).join('\n'), delimiter);
     const map = headerMap(rows[0] || []);
-    if (map) return { items: rows.slice(1).map((r) => fromColumns(r, map)).filter(Boolean), format: 'table' };
+    if (map) {
+      const columns = Object.keys(COLUMNS).filter((f) => f in map);
+      return { items: rows.slice(1).map((r) => fromColumns(r, map)).filter(Boolean), format: 'table', columns };
+    }
     // No header: German, meaning, and optionally example and its translation.
     const items = rows
       .map((r) => fromColumns(r, { lemma: 0, zh: 1, example: 2, exampleZh: 3 }))
       .filter(Boolean);
-    return { items, format: 'columns' };
+    const width = Math.min(4, Math.max(...rows.map((r) => r.filter((c) => c.trim()).length)));
+    return { items, format: 'columns', columns: ['lemma', 'zh', 'example', 'exampleZh'].slice(0, Math.max(2, width)) };
   }
-  return { items: lines.map((l) => parseLine(clean(l))).filter(Boolean), format: 'lines' };
+  return { items: lines.map((l) => parseLine(clean(l))).filter(Boolean), format: 'lines', columns: [] };
 }
 
 export async function itemsFromFile(file) {
