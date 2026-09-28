@@ -1,5 +1,5 @@
 import { idb } from './db.js';
-import { state, markSettingsClean, markAllDirty, onChange } from './store.js';
+import { state, markSettingsClean, markAllDirty, onChange, reconcile } from './store.js';
 
 const BATCH = 400;
 
@@ -142,9 +142,8 @@ async function applyRows(rows) {
   let changed = false;
   for (const r of rows) {
     if (r.kind === 'word' && r.data) {
-      const local = state.words.get(r.id);
-      if (!local || r.updated_at > local.updatedAt) {
-        const w = { ...r.data, updatedAt: r.updated_at, deleted: r.deleted, dirty: false };
+      const w = reconcile(state.words.get(r.id), { ...r.data, updatedAt: r.updated_at, deleted: r.deleted });
+      if (w) {
         state.words.set(w.id, w);
         words.push(w);
       }
@@ -178,17 +177,20 @@ export function syncNow() {
     }
     setStatus('syncing');
     try {
-      const changes = collect();
       let changed = false;
-      for (;;) {
-        const batch = changes.splice(0, BATCH);
+      const round = async (batch) => {
         const res = await api('/api/sync', { since: sync.cursor, changes: batch });
         await markSent(batch);
         if (await applyRows(res.rows)) changed = true;
         sync.cursor = res.cursor;
         await idb.setKV('cursor', sync.cursor);
-        if (!changes.length && !res.more) break;
-      }
+        return res;
+      };
+      // Pull first: local edits are merged with anything newer from other devices before
+      // they are sent, instead of overwriting it.
+      while ((await round([])).more);
+      const changes = collect();
+      while (changes.length) await round(changes.splice(0, BATCH));
       sync.lastSync = Date.now();
       await idb.setKV('lastSync', sync.lastSync);
       failures = 0;

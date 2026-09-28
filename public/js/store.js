@@ -6,9 +6,7 @@ export const CARD_TYPES = ['meaning', 'article', 'spell'];
 
 export const DEFAULT_SETTINGS = {
   newPerDay: 20,
-  articleNewPerDay: 40,
   spell: true,
-  spellNewPerDay: 15,
   retention: 0.9,
   autoSpeak: true,
   updatedAt: 0,
@@ -19,7 +17,8 @@ export const state = {
   logs: [],
   settings: { ...DEFAULT_SETTINGS },
   settingsDirty: false,
-  extraNew: { day: 0, n: 0 }, // "study more" on top of today's limit, per device
+  extraNew: { day: 0, n: 0, force: false }, // "study more" on top of today's limit, per device
+  lastBackup: 0,
 };
 
 const listeners = new Set();
@@ -30,18 +29,33 @@ const uid = () =>
   crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
 
 export async function load() {
-  const [words, logs, settings, extraNew] = await Promise.all([
+  const [words, logs, settings, extraNew, lastBackup] = await Promise.all([
     idb.all('words'),
     idb.all('logs'),
     idb.getKV('settings', null),
     idb.getKV('extraNew', null),
+    idb.getKV('lastBackup', 0),
   ]);
   if (extraNew) state.extraNew = extraNew;
+  state.lastBackup = lastBackup;
+  guessBatches(words);
   state.words = new Map(words.map((w) => [w.id, w]));
   state.logs = logs.sort((a, b) => a.ts - b.ts);
   if (settings) {
     state.settings = { ...DEFAULT_SETTINGS, ...settings.value };
     state.settingsDirty = settings.dirty;
+  }
+}
+
+// Words saved before batches existed: an import gave consecutive rows consecutive
+// milliseconds, so runs of those belong together.
+function guessBatches(words) {
+  let batch = 0;
+  let prev = -Infinity;
+  for (const w of [...words].sort((a, b) => a.createdAt - b.createdAt)) {
+    if (w.createdAt - prev > 1) batch = w.createdAt;
+    prev = w.createdAt;
+    w.batch ??= batch;
   }
 }
 
@@ -76,6 +90,8 @@ export function makeWord(f) {
     tags: f.tags || [],
     createdAt: now,
     updatedAt: now,
+    editedAt: now,
+    batch: f.batch || now,
     suspended: false,
     deleted: false,
     cards: { meaning: newCard() },
@@ -105,6 +121,7 @@ export async function updateWords(list, change) {
   const now = Date.now();
   for (const w of list) {
     change(w);
+    w.editedAt = now;
     w.updatedAt = Math.max(now, (w.updatedAt || 0) + 1);
     w.dirty = true;
   }
@@ -133,11 +150,13 @@ export async function addWords(list) {
 
 export async function deleteWord(w) {
   w.deleted = true;
+  w.editedAt = Date.now();
   await saveWord(w);
 }
 
 export async function resetProgress(w) {
   w.cards = { meaning: newCard() };
+  w.resetAt = Date.now();
   await saveWord(w);
 }
 
@@ -167,6 +186,20 @@ export function eligible(w, type) {
   return false;
 }
 
+// Newest batch first, so this week's lesson or a word met today doesn't wait behind a
+// long list imported earlier; within a batch, the list's own order.
+export const newOrder = (a, b) => (b.batch ?? b.createdAt) - (a.batch ?? a.createdAt) || a.createdAt - b.createdAt;
+
+// Reviews per day. Past this, the rest wait for the next days and no new words are added,
+// so coming back after a break doesn't mean one enormous session.
+export const reviewCap = () => Math.max(150, 15 * state.settings.newPerDay);
+
+function reviewsDone(since) {
+  let n = 0;
+  for (let i = state.logs.length - 1; i >= 0 && state.logs[i].ts >= since; i--) if (state.logs[i].st === 'review') n++;
+  return n;
+}
+
 function scan(types, now) {
   const today = dayStart(now);
   const introduced = { meaning: 0, article: 0, spell: 0 };
@@ -189,19 +222,24 @@ function scan(types, now) {
     }
   }
   const s = state.settings;
-  const extra = state.extraNew.day === today ? state.extraNew.n : 0;
-  const limits = {
-    meaning: s.newPerDay + extra,
-    article: s.articleNewPerDay + extra,
-    spell: s.spell ? s.spellNewPerDay : 0,
-  };
+  const ex = state.extraNew.day === today ? state.extraNew : { n: 0, force: false };
+  const capLeft = Math.max(0, reviewCap() - reviewsDone(today));
+  const allDue = reviews.length;
+  reviews.sort((a, b) => a.c.due - b.c.due || a.w.createdAt - b.w.createdAt);
+  reviews.length = Math.min(reviews.length, capLeft);
+  const overflow = allDue - reviews.length;
+  const paused = overflow > 0 && !ex.force;
+  // Article cards follow the nouns just learned, so their limit moves with the new words.
+  const limits = paused
+    ? { meaning: ex.n, article: ex.n, spell: 0 }
+    : { meaning: s.newPerDay + ex.n, article: 2 * s.newPerDay + ex.n, spell: s.spell ? s.newPerDay : 0 };
   const newLeft = {};
   for (const t of CARD_TYPES) newLeft[t] = Math.max(0, Math.min(news[t].length, limits[t] - introduced[t]));
-  return { news, reviews, learning, newLeft, introduced, limits };
+  return { news, reviews, learning, newLeft, introduced, limits, overflow, paused };
 }
 
 export function todayCounts(now = Date.now()) {
-  const { reviews, learning, newLeft, news, introduced, limits } = scan(CARD_TYPES, now);
+  const { reviews, learning, newLeft, news, introduced, limits, overflow, paused } = scan(CARD_TYPES, now);
   const due = { meaning: 0, article: 0, spell: 0 };
   for (const r of reviews) due[r.t]++;
   for (const l of learning) if (l.c.due <= now + 20 * MIN) due[l.t]++;
@@ -209,7 +247,7 @@ export function todayCounts(now = Date.now()) {
   // Nouns introduced today unlock an article card right after; counting them up front keeps
   // the session progress from growing as you go.
   const upcomingNouns = [...news.meaning]
-    .sort((a, b) => a.createdAt - b.createdAt)
+    .sort(newOrder)
     .slice(0, newLeft.meaning)
     .filter((w) => w.pos === 'noun' && ARTICLES.includes(w.article)).length;
   const articleRoom = Math.max(0, limits.article - introduced.article - newLeft.article);
@@ -235,12 +273,15 @@ export function todayCounts(now = Date.now()) {
     upcomingArticles,
     upcomingAnswers: upcomingArticles * learnSteps,
     answersLeft,
+    overflow,
+    paused,
   };
 }
 
-export async function addExtraNew(n, now = Date.now()) {
+export async function addExtraNew(n, now = Date.now(), force = false) {
   const day = dayStart(now);
-  state.extraNew = { day, n: (state.extraNew.day === day ? state.extraNew.n : 0) + n };
+  const cur = state.extraNew.day === day ? state.extraNew : { n: 0, force: false };
+  state.extraNew = { day, n: cur.n + n, force: cur.force || force };
   await idb.setKV('extraNew', state.extraNew);
 }
 
@@ -255,7 +296,6 @@ export function pickNext(session, now = Date.now()) {
   const ld = learnDue.find(notLast);
   if (ld) return ld;
 
-  reviews.sort((a, b) => a.c.due - b.c.due || a.w.createdAt - b.w.createdAt);
   const review = reviews.find(notLast);
 
   let fresh = null;
@@ -264,7 +304,7 @@ export function pickNext(session, now = Date.now()) {
     const list = news[t].filter((w) => w.id !== session.lastWordId);
     if (!list.length) continue;
     if (t === 'article') list.sort((a, b) => getCard(a, 'meaning').firstAt - getCard(b, 'meaning').firstAt);
-    else list.sort((a, b) => a.createdAt - b.createdAt);
+    else list.sort(newOrder);
     fresh = { w: list[0], t, c: getCard(list[0], t) };
     break;
   }
@@ -397,9 +437,10 @@ export function stats(now = Date.now()) {
     }
   }
 
-  const hardArticles = words
-    .filter((w) => w.cards.article?.lapses >= 2)
-    .sort((a, b) => b.cards.article.lapses - a.cards.article.lapses)
+  const lapsesOf = (w) => CARD_TYPES.reduce((n, t) => n + (w.cards[t]?.lapses || 0), 0);
+  const hardWords = words
+    .filter((w) => lapsesOf(w) >= 3)
+    .sort((a, b) => lapsesOf(b) - lapsesOf(a))
     .slice(0, 20);
 
   return {
@@ -410,9 +451,78 @@ export function stats(now = Date.now()) {
     streak,
     retention,
     forecast,
-    hardArticles,
+    hardWords,
     perDay,
   };
+}
+
+// Rough daily minutes about two months in, for a given number of new words a day. The
+// per-word factors come from simulating this scheduler at 90% recall; answer times are the
+// user's own once there are enough of them.
+export function estimateMinutes(newPerDay = state.settings.newPerDay) {
+  const words = liveWords();
+  const nouns = words.length ? words.filter((w) => w.pos === 'noun' && ARTICLES.includes(w.article)).length / words.length : 0.5;
+  const secs = { meaning: 7, article: 3, spell: 14 };
+  for (const t of CARD_TYPES) {
+    const ms = [];
+    for (let i = state.logs.length - 1; i >= 0 && ms.length < 300; i--) {
+      const l = state.logs[i];
+      if (l.t === t && l.ms > 0) ms.push(l.ms);
+    }
+    if (ms.length >= 30) secs[t] = ms.sort((a, b) => a - b)[ms.length >> 1] / 1000;
+  }
+  const perWord = 7.8 * secs.meaning + 6.5 * nouns * secs.article + (state.settings.spell ? 4.7 * secs.spell : 0);
+  return Math.round((newPerDay * perWord * 1.1) / 60);
+}
+
+// Merging two copies of a word edited on different devices: the text and flags come from
+// the later edit, each card from the later review, so an offline review can't undo an edit
+// made elsewhere and vice versa.
+const META = ['lemma', 'article', 'plural', 'pos', 'forms', 'zh', 'example', 'exampleZh', 'notes', 'tags', 'suspended', 'deleted', 'batch'];
+const editTime = (w) => w.editedAt ?? w.updatedAt ?? 0;
+
+export function mergeWord(local, remote) {
+  const src = editTime(local) > editTime(remote) ? local : remote;
+  const resetAt = Math.max(local.resetAt || 0, remote.resetAt || 0);
+  const cards = {};
+  for (const t of new Set([...Object.keys(local.cards || {}), ...Object.keys(remote.cards || {})])) {
+    const a = local.cards?.[t];
+    const b = remote.cards?.[t];
+    const c = !a ? b : !b ? a : (a.last || 0) > (b.last || 0) ? a : b;
+    if (c && (c.state === 'new' || (c.last || 0) >= resetAt)) cards[t] = c;
+  }
+  cards.meaning ??= newCard();
+  const merged = { ...remote, cards, createdAt: Math.min(local.createdAt, remote.createdAt), editedAt: editTime(src) };
+  for (const k of META) if (k in src) merged[k] = src[k];
+  if (resetAt) merged.resetAt = resetAt;
+  return merged;
+}
+
+const stable = (v) =>
+  Array.isArray(v)
+    ? `[${v.map(stable).join(',')}]`
+    : v && typeof v === 'object'
+      ? `{${Object.keys(v)
+          .filter((k) => k !== 'dirty' && k !== 'updatedAt' && v[k] !== undefined)
+          .sort()
+          .map((k) => `${k}:${stable(v[k])}`)
+          .join(',')}}`
+      : JSON.stringify(v);
+
+/** What to store when another copy of a word arrives; null when nothing changes. */
+export function reconcile(local, remote) {
+  if (!local) return { ...remote, dirty: false };
+  if (remote.updatedAt === local.updatedAt) return null;
+  const merged = mergeWord(local, remote);
+  if (stable(merged) === stable(remote)) return remote.updatedAt > local.updatedAt ? { ...remote, dirty: false } : null;
+  if (stable(merged) === stable(local) && local.updatedAt > remote.updatedAt) return local.dirty ? null : { ...local, dirty: true };
+  // Both sides had something new: keep the merge and send it back so every device converges.
+  return { ...merged, updatedAt: Math.max(local.updatedAt, remote.updatedAt) + 1, dirty: true };
+}
+
+export async function markBackedUp(now = Date.now()) {
+  state.lastBackup = now;
+  await idb.setKV('lastBackup', now);
 }
 
 export function exportData() {
@@ -442,8 +552,16 @@ export async function importData(data) {
   const words = [];
   for (const w of Array.isArray(data.words) ? data.words : []) {
     if (!isWordRecord(w)) continue;
-    const local = state.words.get(w.id);
-    if (!local || w.updatedAt > local.updatedAt) words.push({ ...w, dirty: true });
+    const next = reconcile(state.words.get(w.id), w);
+    if (next) words.push({ ...next, dirty: true });
+  }
+  let settings = false;
+  const s = data.settings;
+  if (s && typeof s === 'object' && Number.isFinite(s.updatedAt) && s.updatedAt > state.settings.updatedAt) {
+    state.settings = { ...DEFAULT_SETTINGS, ...s };
+    state.settingsDirty = true;
+    await idb.setKV('settings', { value: state.settings, dirty: true });
+    settings = true;
   }
   const known = new Set(state.logs.map((l) => l.id));
   const logs = (Array.isArray(data.logs) ? data.logs : [])
@@ -455,7 +573,7 @@ export async function importData(data) {
     state.logs = [...state.logs, ...logs].sort((a, b) => a.ts - b.ts);
   }
   emit();
-  return { words: words.length, logs: logs.length };
+  return { words: words.length, logs: logs.length, settings };
 }
 
 export async function wipeLocal() {

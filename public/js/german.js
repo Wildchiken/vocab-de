@@ -40,6 +40,23 @@ export function pluralFromSpec(lemma, spec) {
 // marker ("der Lehrer, -"), not a separator.
 const SEP = /(?<![,，])(?:\s+[-–—=|]\s+|\s*[:：=]\s+)/;
 
+// Dictionary-style entries: "der Tisch, -e", "das Kind (-er)", "gehen, ging, ist gegangen".
+const NOUN_ENTRY = /^(?:der|die|das|Der|Die|Das)\s+[A-ZÄÖÜ][^\s,()]*(?:\s*\([^)]*\))?\s*(?:,|$)/;
+const VERB_ENTRY = /^(?:sich\s+)?[a-zäöüß][^\s,]*\s*,/;
+
+/**
+ * Sentences and fixed phrases are learned whole. Their commas, capitals and leading
+ * "Das"/"Die" are ordinary text, not plural markers, verb forms or articles.
+ * Returns 'sentence', 'phrase' or '' for a single word or dictionary entry.
+ */
+export function multiWordKind(de) {
+  if (NOUN_ENTRY.test(de) || VERB_ENTRY.test(de) || /^sich\s/.test(de)) return '';
+  const words = de.split(/\s+/).filter(Boolean);
+  if (/[.?!…]$/.test(de) || de.includes(',') || words.length >= 4) return 'sentence';
+  if (words.length >= 2) return 'phrase';
+  return '';
+}
+
 /**
  * Parses one line of a word list. The meaning may be in any language; it is stored in `zh`
  * for backward compatibility. Examples:
@@ -49,6 +66,7 @@ const SEP = /(?<![,，])(?:\s+[-–—=|]\s+|\s*[:：=]\s+)/;
  *   der Abend, -e  Am Abend sehe ich fern.   (Goethe list: a sentence becomes the example)
  *   gehen, ging, ist gegangen = to go
  *   Zeitung
+ *   Wie geht es dir? 你好吗          (kept whole as a sentence)
  */
 export function parseLine(raw) {
   let line = raw.replace(/ /g, ' ').trim();
@@ -78,6 +96,8 @@ export function parseLine(raw) {
   de = de.replace(/[：:=|]$/, '').trim();
 
   const item = { raw: raw.trim(), lemma: '', article: '', plural: '', pos: '', forms: '', zh, example: '', exampleZh: '' };
+  const kind = multiWordKind(de);
+  if (kind) return de ? { ...item, lemma: de, pos: kind } : null;
 
   let parenSpec = '';
   if (/^(der|die|das)\s/i.test(de)) {
@@ -216,9 +236,24 @@ function levenshtein(a, b) {
   return dp[b.length];
 }
 
-// result: exact | near | wrong; why: case | noArticle | wrongArticle | oneLetter
+const PUNCT = /[.,!?;:…"„“”'’‚‘«»()\-–—]/g;
+const bare = (s) => norm(s).replace(PUNCT, '').replace(/\s+/g, ' ').trim();
+
+// Sentences: punctuation is ignored, case and umlauts count as "near", and a few typos
+// are allowed in proportion to the length.
+function checkSentence(input, expected) {
+  if (bare(input) === bare(expected)) return { result: 'exact', expected };
+  const a = loose(bare(input));
+  const e = loose(bare(expected));
+  if (a === e) return { result: 'near', expected, why: 'case' };
+  if (levenshtein(a, e) <= Math.max(1, Math.floor(e.length / 12))) return { result: 'near', expected, why: 'typos' };
+  return { result: 'wrong', expected };
+}
+
+// result: exact | near | wrong; why: case | noArticle | wrongArticle | oneLetter | typos
 export function checkSpelling(input, w) {
   const expected = displayWord(w);
+  if (w.pos === 'sentence' || w.pos === 'phrase') return checkSentence(input, expected);
   const a = norm(input);
   if (a === norm(expected)) return { result: 'exact', expected };
   if (loose(a) === loose(expected)) return { result: 'near', expected, why: 'case' };

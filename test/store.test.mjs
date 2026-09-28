@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { state, makeWord, pickNext, todayCounts, eligible, DEFAULT_SETTINGS } from '../public/js/store.js';
+import { state, makeWord, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, DEFAULT_SETTINGS } from '../public/js/store.js';
 import { MIN, DAY, dayStart } from '../public/js/fsrs.js';
 
 const now = new Date('2026-09-27T10:00:00').getTime();
@@ -101,4 +101,92 @@ test('article cards unlocked by today\'s new nouns are counted up front', () => 
   // every new card is answered once per learning step
   assert.equal(c.answersLeft.meaning, 6);
   assert.equal(c.upcomingAnswers, 4);
+});
+
+test('the newest batch is learned first, each batch in its own order', () => {
+  const list = [noun('A1', 'der', 1), noun('A2', 'der', 2), noun('B1', 'die', 50), noun('B2', 'die', 51)];
+  list[0].batch = list[1].batch = 1;
+  list[2].batch = list[3].batch = 50;
+  setWords(list);
+  const s = session(['meaning']);
+  const first = pickNext(s, now);
+  assert.equal(first.w.lemma, 'B1');
+  s.lastWordId = first.w.id;
+  assert.equal(pickNext(s, now).w.lemma, 'B2');
+});
+
+test('a backlog is spread over several days and pauses new words', () => {
+  const review = (i) => {
+    const w = noun(`R${i}`, 'der', i);
+    w.cards.meaning = { state: 'review', due: now - DAY, s: 10, d: 5, reps: 3, lapses: 0, step: 0, last: now - 11 * DAY, firstAt: now - 30 * DAY };
+    return w;
+  };
+  const list = Array.from({ length: 400 }, (_, i) => review(i));
+  list.push(noun('Neu', 'das', 1000));
+  setWords(list);
+  state.settings.newPerDay = 20;
+  let c = todayCounts(now);
+  assert.equal(c.due.meaning, 300);
+  assert.equal(c.overflow, 100);
+  assert.equal(c.paused, true);
+  assert.equal(c.newLeft.meaning, 0);
+  state.extraNew = { day: dayStart(now), n: 0, force: true };
+  c = todayCounts(now);
+  assert.equal(c.newLeft.meaning, 1);
+  state.extraNew = { day: 0, n: 0 };
+  // reviews already done today count against the cap
+  state.logs = Array.from({ length: 300 }, (_, i) => ({ id: `l${i}`, ts: now - i * 1000, st: 'review', t: 'meaning' }));
+  assert.equal(todayCounts(now).due.meaning, 0);
+});
+
+test('an edit on one device and a review on another are both kept', () => {
+  const base = noun('Tisch', 'der', 1);
+  base.updatedAt = base.editedAt = 100;
+  const mac = { ...structuredClone(base), zh: '桌子（新）', editedAt: 200, updatedAt: 200 };
+  const phone = structuredClone(base);
+  phone.cards.meaning = { ...phone.cards.meaning, state: 'review', reps: 3, s: 9, last: 300, due: 400 };
+  phone.updatedAt = 300;
+  // the phone pulls the Mac's edit while holding its own offline review
+  const merged = reconcile(phone, mac);
+  assert.equal(merged.zh, '桌子（新）');
+  assert.equal(merged.cards.meaning.s, 9);
+  assert.equal(merged.dirty, true);
+  assert.ok(merged.updatedAt > 300);
+  // the Mac then receives the merge unchanged
+  const back = reconcile(mac, { ...merged, dirty: undefined });
+  assert.equal(back.dirty, false);
+  assert.equal(back.zh, '桌子（新）');
+});
+
+test('a reset wins over older reviews from another device', () => {
+  const w = noun('Tür', 'die', 1);
+  const reviewed = structuredClone(w);
+  reviewed.cards.meaning = { ...reviewed.cards.meaning, state: 'review', reps: 4, s: 20, last: 500 };
+  reviewed.cards.article = { ...reviewed.cards.meaning, last: 450 };
+  reviewed.updatedAt = 500;
+  const reset = structuredClone(w);
+  reset.resetAt = 600;
+  reset.updatedAt = 600;
+  const merged = mergeWord(reviewed, reset);
+  assert.equal(merged.cards.meaning.state, 'new');
+  assert.equal(merged.cards.article, undefined);
+});
+
+test('an unchanged copy from the server is not re-sent', () => {
+  const w = noun('Haus', 'das', 1);
+  w.updatedAt = w.editedAt = 10;
+  assert.equal(reconcile(w, { ...structuredClone(w), updatedAt: 5 }), null);
+  const newer = { ...structuredClone(w), zh: 'house', editedAt: 20, updatedAt: 20 };
+  assert.deepEqual(reconcile(w, newer), { ...newer, dirty: false });
+});
+
+test('the daily time estimate follows the number of new words', () => {
+  setWords([noun('A', 'der', 1), makeWord({ lemma: 'gehen', pos: 'verb', zh: 'go' })]);
+  state.settings.spell = true;
+  const a = estimateMinutes(20);
+  assert.ok(a > 30 && a < 70, String(a));
+  assert.ok(estimateMinutes(10) < a);
+  state.settings.spell = false;
+  assert.ok(estimateMinutes(20) < a);
+  state.settings.spell = true;
 });

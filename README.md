@@ -8,15 +8,20 @@ A German vocabulary trainer that runs in the browser. It works on phones, tablet
 
 - A 20-word A1 starter set to try before importing your own list
 - Tags and batch selection for organizing words, pausing/resuming review, and deleting entries
+- Sentences and set phrases as well as single words (`Das ist mir egal.`, `auf jeden Fall`); spelling checks ignore punctuation and flag a small typo instead of marking it wrong
+- Free practice for a selection or a tag, without touching the review schedule, for a quick pass before a test
+- Statistics list the words you keep forgetting, and a word you miss again and again gets a nudge to add an example or break it down
 
 - Three independently scheduled card types, available according to the word and your learning progress:
   - Meaning: see the German word, recall what it means, rate yourself
   - Article (nouns with a known article): see only the noun and pick der / die / das; graded automatically by correctness and speed
-  - Spelling: see the meaning and type the German (nouns with their article); unlocked once the meaning is well learned
+  - Spelling: see the meaning and type the German (nouns with their article); unlocked once the meaning is well learned. Tap Show answer to recall without typing and rate yourself
 - Scheduling uses [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm), with a target recall of 85%, 90% or 95%
+- A predictable workload: one "new words per day" setting, with an estimate of daily minutes two months in based on your own answer speed. After a break, piled-up reviews are spread over a few days and new words pause meanwhile
+- The most recently added batch of words is learned first, in its own order, so this week's lesson or a word you just met doesn't wait behind a long list
 - When you miss an article, you get the relevant ending rule (-ung → die, -chen → das, ...), the head noun of a compound (Haustür → die Tür), or a note that the word is an exception
 - Free article practice that favors the nouns you get wrong most
-- Paste import that understands common list formats: `der Tisch, -e - table`, `die Mutter, ¨ - mother`, `gehen, ging, ist gegangen = to go`, Goethe word lists, and two columns copied from a spreadsheet. Plural markers are expanded to full forms
+- Paste or file import (.txt, .csv, .tsv, or drop the file in), including this app's CSV export, Anki plain-text exports and GBK-encoded CSV from Excel. Understands common list formats: `der Tisch, -e - table`, `die Mutter, ¨ - mother`, `gehen, ging, ist gegangen = to go`, Goethe word lists, and two columns copied from a spreadsheet. Plural markers are expanded to full forms
 - Offline first: all data lives in the browser (IndexedDB), every release is precached, and changes sync when a connection is available
 - Interface modeled on iOS, with a sidebar on wide screens, dark mode, adjustable text size, and support for reduced motion and transparency
 - German text-to-speech with the voices your system provides, keyboard shortcuts on computers
@@ -103,15 +108,22 @@ gehen, ging, ist gegangen = to go
 Zeitung
 ```
 
-A lone `-` after a comma means "plural same as singular", not a separator. Lines without a meaning or article can be completed in the import preview.
+A lone `-` after a comma means "plural same as singular", not a separator. Lines ending in `.`, `?` or `!`, or longer lines, are treated as sentences; two or three words as a phrase. Lines without a meaning or article can be completed in the import preview.
+
+File import:
+
+- CSV with a header: columns such as `lemma`/`word`/`german`, `meaning`/`translation`, `article`, `plural`, `example`, `tags` are recognized, so the app's own CSV export imports back as is
+- CSV or TSV without a header: German, meaning, then optionally example and its translation
+- Anki: export with "Notes in Plain Text"; lines starting with `#` are skipped and HTML in fields is removed
+- Any other text file is read line by line as above
 
 ## How sync works
 
-Every record carries an update time. The server keeps the most recent write, and clients pull changes by a server sequence number. If two offline devices change the same word, the version with the newer update time wins, so device clocks that are far off can affect the result. Review logs sync by their own IDs. The Cloudflare Worker and the Node server serve the same API.
+Clients first pull changes by a server sequence number, then upload their own. When a word was changed on two devices, the client merges the copies: text such as the meaning comes from the later edit, and each card from the later review, so an offline review on one device can't undo an edit made on another. The merge is uploaded again, so all devices converge. The server itself keeps the record with the newer update time. Device clocks that are far off can affect the result. Review logs sync by their own IDs. The Cloudflare Worker and the Node server serve the same API.
 
 ## Data and backup
 
-Words, review history and settings are stored locally. JSON export includes words, review history and settings. Import currently merges words and review history; it does not restore settings, so configure those again on a new device. CSV export is only a word list. Clearing site data or browser storage eviction can remove local data. Export a backup before changing domains or browser profiles.
+Words, review history and settings are stored locally. JSON export includes words, review history and settings. Import merges words and review history, and restores the settings when the backup's are newer. With sync off, the home screen reminds you once two weeks pass without a backup. CSV export is a word list without review history, and can be imported again. Clearing site data or browser storage eviction can remove local data. Export a backup before changing domains or browser profiles.
 
 Each sync deployment is one shared library, not a multi-user account system. Anyone with the sync token can read and change that library. The token protects `/api/*`; the app page itself is public. Use HTTPS in production. Sync is not end-to-end encrypted.
 
@@ -130,6 +142,7 @@ npm test
 public/              Front end: plain HTML, CSS and ES modules, no bundler
   js/fsrs.js         FSRS scheduler
   js/german.js       Parsing, plural expansion, article rules, spelling check
+  js/importer.js     File import: encoding detection, CSV, Anki text
   js/store.js        IndexedDB storage, card selection, statistics
   js/sync.js         Incremental sync
   js/i18n.js         English and Chinese strings

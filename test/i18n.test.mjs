@@ -17,11 +17,11 @@ test('every key used in the UI exists', () => {
   const dynamic = [
     ...['meaning', 'article', 'spell'].map((k) => `type.${k}`),
     ...['new', 'learning', 'young', 'mature', 'suspended'].map((k) => `st.${k}`),
-    ...['noun', 'verb', 'adj', 'adv', 'prep', 'conj', 'phrase', 'other'].map((k) => `pos.${k}`),
+    ...['noun', 'verb', 'adj', 'adv', 'prep', 'conj', 'phrase', 'sentence', 'other'].map((k) => `pos.${k}`),
     ...['off', 'idle', 'syncing', 'pending', 'error', 'offline'].map((k) => `sync.${k}`),
     ...['token', 'server', 'network'].map((k) => `sync.err.${k}`),
     ...['ok', 'near', 'bad'].map((k) => `spell.${k}`),
-    ...['case', 'noArticle', 'wrongArticle', 'oneLetter'].map((k) => `spell.why.${k}`),
+    ...['case', 'noArticle', 'wrongArticle', 'oneLetter', 'typos'].map((k) => `spell.why.${k}`),
     ...[1, 2, 3, 4].map((g) => `rate.${g}`),
     ...RULE_IDS.map((id) => `rule.${id}`),
   ];

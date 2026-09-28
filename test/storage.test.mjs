@@ -44,7 +44,11 @@ test('batch updates are saved and marked for sync', async () => {
 test('backup import skips invalid records and wipe clears everything', async () => {
   const good = { ...S.makeWord({ lemma: 'Buch', zh: 'book' }), updatedAt: Date.now() + 1000 };
   const r = await S.importData({ app: 'vocab-de', words: [good, { id: 1 }, { id: 'x', lemma: '' }], logs: [{ id: 'l1', ts: 1 }, {}] });
-  assert.deepEqual(r, { words: 1, logs: 1 });
+  assert.deepEqual(r, { words: 1, logs: 1, settings: false });
+  // settings from a newer backup are restored too
+  const settings = { ...S.state.settings, newPerDay: 7, updatedAt: Date.now() + 5000 };
+  assert.equal((await S.importData({ app: 'vocab-de', settings, words: [], logs: [] })).settings, true);
+  assert.equal(S.state.settings.newPerDay, 7);
   await assert.rejects(S.importData({ app: 'other' }));
   await S.wipeLocal();
   assert.equal((await idb.all('words')).length, 0);
