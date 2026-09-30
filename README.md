@@ -4,6 +4,14 @@ English | [中文](README.zh-CN.md)
 
 A German vocabulary trainer that runs in the browser. It works on phones, tablets and computers, supports offline study in an ordinary browser, and can optionally be installed as an app. Sync between devices is optional and runs on a server you control. The interface is in English or Chinese, and meanings can be written in any language.
 
+![Tablet home screen with today's reviews and new words](docs/screenshots/en/home.png)
+
+| Article feedback and three grades | Search and organize words | Progress in dark mode |
+|:---:|:---:|:---:|
+| <a href="docs/screenshots/en/study.png"><img src="docs/screenshots/en/study.png" width="250" alt="Meaning card with article feedback, an example sentence and three rating buttons"></a> | <a href="docs/screenshots/en/words.png"><img src="docs/screenshots/en/words.png" width="250" alt="Word list with search, tag and status filters, colored articles and plural forms"></a> | <a href="docs/screenshots/en/stats.png"><img src="docs/screenshots/en/stats.png" width="250" alt="Dark statistics screen with study counts, word status and progress by tag"></a> |
+
+Screenshots use the starter vocabulary and simulated review history, captured in a desktop browser at tablet and phone sizes. Click an image to view it in full.
+
 ## Features
 
 - A 20-word A1 starter set to try before importing your own list
@@ -139,6 +147,7 @@ npm start          # Node server on http://localhost:8787
 npm run dev        # or the Cloudflare dev server (needs .dev.vars with SYNC_TOKEN)
 npm test           # unit tests
 npm run test:e2e   # browser smoke test; run npx playwright install chromium webkit once first
+npm run screenshots # refresh the English and Chinese README screenshots with isolated example data
 ```
 
 ```

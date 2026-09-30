@@ -10,7 +10,8 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test": "node --test --test-timeout=10000 test/*.test.mjs",
-    "test:e2e": "node e2e/smoke.mjs"
+    "test:e2e": "node e2e/smoke.mjs",
+    "screenshots": "node scripts/build-sw.mjs && node scripts/capture-screenshots.mjs"
   },
   "devDependencies": {
     "fake-indexeddb": "^6.2.5",

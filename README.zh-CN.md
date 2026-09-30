@@ -4,6 +4,14 @@
 
 在浏览器里背德语单词的应用。面向手机、平板和电脑，支持普通浏览器离线学习，安装成应用是可选项。多设备同步是可选的，数据放在你自己控制的服务器上。界面有中文和英文，释义可以用任何语言写。
 
+![平板首页：今日待复习、新词与学习入口](docs/screenshots/zh/home.png)
+
+| 冠词反馈与三档评分 | 搜索与管理词库 | 深色模式下的学习进度 |
+|:---:|:---:|:---:|
+| <a href="docs/screenshots/zh/study.png"><img src="docs/screenshots/zh/study.png" width="250" alt="释义卡展示冠词反馈、例句及不认识、模糊、认识三档评分"></a> | <a href="docs/screenshots/zh/words.png"><img src="docs/screenshots/zh/words.png" width="250" alt="词库支持搜索、标签和状态筛选，显示彩色冠词及复数"></a> | <a href="docs/screenshots/zh/stats.png"><img src="docs/screenshots/zh/stats.png" width="250" alt="深色统计页展示学习数量、词库状态及标签进度"></a> |
+
+截图使用内置示例词和模拟学习记录，在桌面浏览器中按平板、手机尺寸拍摄。点击图片可查看大图。
+
 ## 功能
 
 - 内置 20 个 A1 示例词，可以先试用，再导入自己的词表
@@ -139,6 +147,7 @@ npm start          # Node 服务器，http://localhost:8787
 npm run dev        # 或者 Cloudflare 本地环境（需要 .dev.vars 里写 SYNC_TOKEN）
 npm test           # 单元测试
 npm run test:e2e   # 浏览器冒烟测试，先运行一次 npx playwright install chromium webkit
+npm run screenshots # 使用独立示例数据重新拍摄中英文 README 截图
 ```
 
 ```
