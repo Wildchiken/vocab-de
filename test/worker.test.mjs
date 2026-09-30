@@ -56,3 +56,16 @@ test('ignores unknown kinds', async () => {
   const res = await (await call('/api/sync', { since: 0, changes: [{ kind: 'evil', id: 'x', updated_at: 1 }] })).json();
   assert.equal(res.accepted, 0);
 });
+
+test('API and asset responses carry the security headers', async () => {
+  const api = await call('/api/ping');
+  assert.match(api.headers.get('content-security-policy'), /default-src 'self'/);
+  assert.equal(api.headers.get('x-content-type-options'), 'nosniff');
+
+  const assets = { ASSETS: { fetch: async () => new Response('<!doctype html>', { headers: { 'content-type': 'text/html' } }) } };
+  const page = await worker.fetch(new Request('https://x/'), assets);
+  assert.equal(page.headers.get('content-type'), 'text/html');
+  assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.equal(page.headers.get('referrer-policy'), 'no-referrer');
+  assert.equal(await page.text(), '<!doctype html>');
+});

@@ -38,3 +38,13 @@ test('exposes the sync API', async () => {
   });
   assert.equal((await res.json()).rows.length, 1);
 });
+
+test('sends a strict content security policy with the pages and the API', async () => {
+  for (const path of ['/', '/js/app.js', '/api/ping']) {
+    const res = await fetch(`${base}${path}`);
+    const csp = res.headers.get('content-security-policy');
+    assert.match(csp, /script-src 'self'/, path);
+    assert.doesNotMatch(csp, /unsafe-/, path);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff', path);
+  }
+});

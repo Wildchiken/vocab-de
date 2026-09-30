@@ -12,15 +12,17 @@ A German vocabulary trainer that runs in the browser. It works on phones, tablet
 - Free practice for a selection or a tag, without touching the review schedule, for a quick pass before a test
 - Statistics list the words you keep forgetting, and a word you miss again and again gets a nudge to add an example or break it down
 
-- Three independently scheduled card types, available according to the word and your learning progress:
-  - Meaning: see the German word, recall what it means, rate yourself
-  - Article (nouns with a known article): see only the noun and pick der / die / das; graded automatically by correctness and speed
-  - Spelling: see the meaning and type the German (nouns with their article); unlocked once the meaning is well learned. Tap Show answer to recall without typing and rate yourself
-- Scheduling uses [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm), with a target recall of 85%, 90% or 95%
+- One card per word: see the German, recall the meaning, and rate it Don't know / Fuzzy / Know it, as in MaiMemo. A noun met for the first time is shown with its article; from then on the article is asked: picking der / die / das also reveals the answer, or you can look at the answer if you don't remember it. A wrong or forgotten article caps that answer at Fuzzy, since knowing a German noun includes its gender. This can be turned off in Settings
+- Words you already know from a long list: tap "Already know it" on a new card and its first review is set about two weeks out, so you don't have to go through every word. At the end of a round, the words you missed are listed, so you can add a note or go over them again
+- Optional spelling practice (off by default): see the meaning and type the German (nouns with their article), once the meaning is well learned. A correct answer counts as Know it; tap Show answer to recall without typing. Turning it on roughly doubles the daily time
+- Scheduling uses [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm) (created by Jarrett Ye, who worked on MaiMemo's memory algorithm; FSRS grew out of MaiMemo's DHP model), with a target recall of 85%, 90% or 95%. The first answer of the day decides the next review; a word marked Don't know or Fuzzy comes back a few minutes later that day until you know it, without affecting the long-term schedule
 - A predictable workload: one "new words per day" setting, with an estimate of daily minutes two months in based on your own answer speed. After a break, piled-up reviews are spread over a few days and new words pause meanwhile
 - The most recently added batch of words is learned first, in its own order, so this week's lesson or a word you just met doesn't wait behind a long list
 - When you miss an article, you get the relevant ending rule (-ung → die, -chen → das, ...), the head noun of a compound (Haustür → die Tür), or a note that the word is an exception
-- Free article practice that favors the nouns you get wrong most
+- Article drill: learned nouns at random, with the ones you get wrong more often; it doesn't change your schedule
+- Short sounds for right and wrong answers and for finishing a session, which can be turned off in Settings; they stay quiet when the phone is on silent
+- Word list progress: the Stats screen shows, per tag, how many words you have seen and mastered, and estimates the day the list is finished at your daily pace. Adding and editing offer dictionary shortcuts (Wiktionary, LEO, dict.cc or 德语助手), opened in a new tab; the app itself sends nothing to them
+- Adding from elsewhere: select a word on a web page, tap a bookmark, and the Add screen opens with the word and the sentence around it as its example; iOS Shortcuts and your own tools can use the same link. The format and the bookmarklet are on the Import formats page
 - Paste or file import (.txt, .csv, .tsv, or drop the file in), including this app's CSV export, Anki plain-text exports and GBK-encoded CSV from Excel. Understands common list formats: `der Tisch, -e - table`, `die Mutter, ¨ - mother`, `gehen, ging, ist gegangen = to go`, Goethe word lists, and two columns copied from a spreadsheet. Plural markers are expanded to full forms
 - Offline first: all data lives in the browser (IndexedDB), every release is precached, and changes sync when a connection is available
 - Interface modeled on iOS, with a sidebar on wide screens, dark mode, adjustable text size, and support for reduced motion and transparency
@@ -57,7 +59,7 @@ Use HTTPS for Service Workers and secure-context features such as clipboard acce
 
 ### Cloudflare Workers
 
-Uses Workers static assets and D1 without a Node server to maintain. Check your account’s current usage limits when deploying.
+Uses Workers static assets and D1 without a Node server to maintain. Every request goes through the Worker, which adds the security headers (a strict content security policy and others) to the pages; requests count as Worker requests, far below the free allowance for personal use, but check your account’s current usage limits when deploying.
 
 ```bash
 npm install
@@ -135,7 +137,8 @@ The Node backend uses SQLite WAL mode. Use a consistent SQLite backup, or stop t
 npm install
 npm start          # Node server on http://localhost:8787
 npm run dev        # or the Cloudflare dev server (needs .dev.vars with SYNC_TOKEN)
-npm test
+npm test           # unit tests
+npm run test:e2e   # browser smoke test; run npx playwright install chromium webkit once first
 ```
 
 ```
@@ -146,13 +149,17 @@ public/              Front end: plain HTML, CSS and ES modules, no bundler
   js/store.js        IndexedDB storage, card selection, statistics
   js/sync.js         Incremental sync
   js/i18n.js         English and Chinese strings
+  js/dict.js         Links to online dictionaries
+  js/sfx.js          Sound effects, synthesized with Web Audio
   js/app.js          UI
 src/worker.js        Sync API (/api/sync), used by both backends
+src/headers.js       Security headers, used by both backends
 src/sw.js            Service worker template, built into public/sw.js
 server/node.mjs      Self-hosted server
 server/d1-sqlite.mjs SQLite adapter with the D1 interface the API expects
 scripts/             Build helpers
 test/                Unit tests (node --test)
+e2e/                 Browser smoke test (Playwright)
 ```
 
 ## License

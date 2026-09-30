@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { state, makeWord, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, DEFAULT_SETTINGS } from '../public/js/store.js';
+import { state, makeWord, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, tagProgress, DEFAULT_SETTINGS } from '../public/js/store.js';
 import { MIN, DAY, dayStart } from '../public/js/fsrs.js';
 
 const now = new Date('2026-09-27T10:00:00').getTime();
@@ -13,7 +13,7 @@ function noun(lemma, article, createdAt) {
   w.createdAt = createdAt;
   return w;
 }
-const session = (types = ['meaning', 'article', 'spell']) => ({ types, sinceNew: 0, lastWordId: null });
+const session = (types = ['meaning', 'spell']) => ({ types, sinceNew: 0, lastWordId: null });
 
 beforeEach(() => {
   state.settings = { ...DEFAULT_SETTINGS, newPerDay: 2 };
@@ -26,18 +26,10 @@ test('new words come in creation order and respect the daily limit', () => {
   assert.equal(todayCounts(now).newLeft.meaning, 2);
 });
 
-test('article card appears only after the meaning card was seen', () => {
-  const w = noun('Tisch', 'der', 1);
-  setWords([w]);
-  assert.equal(pickNext(session(['article']), now), null);
-  w.cards.meaning = { state: 'review', due: now + 3 * DAY, s: 5, d: 5, reps: 2, lapses: 0, step: 0, last: now - DAY, firstAt: now - 2 * DAY };
-  assert.equal(pickNext(session(['article']), now).t, 'article');
-});
-
-test('learning cards that are due come first', () => {
+test('words to see again today come first', () => {
   const a = noun('Tisch', 'der', 1);
   const b = noun('Tür', 'die', 2);
-  b.cards.meaning = { state: 'learning', due: now - MIN, s: 1, d: 5, reps: 1, lapses: 0, step: 1, last: now - 10 * MIN, firstAt: now - 10 * MIN };
+  b.cards.meaning = { state: 'review', due: now + DAY, s: 1, d: 5, reps: 1, lapses: 0, last: now - 10 * MIN, recheck: now - MIN, firstAt: now - 10 * MIN };
   setWords([a, b]);
   const next = pickNext(session(), now);
   assert.equal(next.w.lemma, 'Tür');
@@ -67,6 +59,7 @@ test('no spelling card for a word without a meaning', () => {
   const w = noun('Tisch', 'der', 1);
   w.cards.meaning = { state: 'review', due: now + 9 * DAY, s: 10, d: 5, reps: 3, lapses: 0, step: 0, last: now - DAY, firstAt: now - 20 * DAY };
   setWords([w]);
+  state.settings.spell = true;
   assert.equal(eligible(w, 'spell'), true);
   w.zh = '';
   assert.equal(eligible(w, 'spell'), false);
@@ -74,10 +67,9 @@ test('no spelling card for a word without a meaning', () => {
 
 test('the card just answered is not shown again right away', () => {
   const w = noun('Tisch', 'der', 1);
-  w.cards.meaning = { state: 'learning', due: now + 10 * MIN, s: 1, d: 5, reps: 1, lapses: 0, step: 1, last: now, firstAt: now };
+  w.cards.meaning = { state: 'review', due: now + DAY, s: 1, d: 5, reps: 1, lapses: 0, last: now, recheck: now + 5 * MIN, firstAt: now };
   setWords([w]);
   state.settings.newPerDay = 0;
-  state.settings.articleNewPerDay = 0;
   assert.equal(pickNext({ ...session(), lastWordId: w.id }, now), null);
   // with another word answered last, it may be done early
   assert.equal(pickNext({ ...session(), lastWordId: 'other' }, now).w.id, w.id);
@@ -86,21 +78,11 @@ test('the card just answered is not shown again right away', () => {
 test('spelling unlocks only once the meaning has held for a while', () => {
   const w = noun('Tisch', 'der', 1);
   const review = (reps, s) => ({ state: 'review', due: now + DAY, s, d: 5, reps, lapses: 0, step: 0, last: now, firstAt: now - DAY });
-  w.cards.meaning = review(2, 3.7); // new card, two Goods on day one
+  state.settings.spell = true;
+  w.cards.meaning = review(1, 3.7); // known at first sight
   assert.equal(eligible(w, 'spell'), false);
   w.cards.meaning = review(4, 12);
   assert.equal(eligible(w, 'spell'), true);
-});
-
-test('article cards unlocked by today\'s new nouns are counted up front', () => {
-  setWords([noun('Tisch', 'der', 1), noun('Tür', 'die', 2), makeWord({ lemma: 'gehen', pos: 'verb', zh: 'go' })]);
-  state.settings.newPerDay = 3;
-  const c = todayCounts(now);
-  assert.equal(c.newLeft.meaning, 3);
-  assert.equal(c.upcomingArticles, 2);
-  // every new card is answered once per learning step
-  assert.equal(c.answersLeft.meaning, 6);
-  assert.equal(c.upcomingAnswers, 4);
 });
 
 test('the newest batch is learned first, each batch in its own order', () => {
@@ -189,4 +171,56 @@ test('the daily time estimate follows the number of new words', () => {
   state.settings.spell = false;
   assert.ok(estimateMinutes(20) < a);
   state.settings.spell = true;
+});
+
+test('a new word counts as two answers for the progress bar', () => {
+  setWords([noun('Tisch', 'der', 1), makeWord({ lemma: 'gehen', pos: 'verb', zh: 'go' })]);
+  state.settings.newPerDay = 5;
+  const c = todayCounts(now);
+  assert.equal(c.newLeft.meaning, 2);
+  assert.equal(c.answersLeft.meaning, 4);
+  assert.equal(c.newLeft.spell, 0);
+});
+
+test('article misses only grow when merging, and a reset starts them over', () => {
+  const a = noun('Tisch', 'der', 1);
+  const b = structuredClone(a);
+  a.artMiss = 3;
+  b.artMiss = 1;
+  assert.equal(mergeWord(a, b).artMiss, 3);
+  // a reset on one device wins over older misses from another
+  b.resetAt = 500;
+  b.artMiss = 0;
+  a.resetAt = 0;
+  assert.equal(mergeWord(a, b).artMiss, undefined);
+  // misses made after the reset are kept
+  b.artMiss = 2;
+  assert.equal(mergeWord(a, b).artMiss, 2);
+});
+
+test('word list progress follows the queue of new words', () => {
+  const day = dayStart(now);
+  const list = [];
+  const add = (lemma, tag, batch, seen) => {
+    const w = noun(lemma, 'der', batch);
+    w.batch = batch;
+    w.tags = [tag];
+    if (seen) w.cards.meaning = { state: 'review', due: now + DAY, s: 30, d: 5, reps: 3, lapses: 0, last: now - DAY, firstAt: now - 40 * DAY };
+    list.push(w);
+  };
+  // "Old" was imported first, "New" later, so New is learned first
+  for (let i = 0; i < 6; i++) add(`O${i}`, 'Old', 1, i < 2);
+  for (let i = 0; i < 5; i++) add(`N${i}`, 'New', 100, false);
+  setWords(list);
+  state.settings.newPerDay = 3;
+  const rows = Object.fromEntries(tagProgress(now).map((r) => [r.tag, r]));
+  assert.deepEqual([rows.New.total, rows.New.seen, rows.Old.total, rows.Old.seen, rows.Old.mature], [5, 0, 6, 2, 2]);
+  // 3 a day starting today: New (5 words) needs today and tomorrow; Old's last unseen word
+  // is number 5 + 4 = 9 in the queue, so the day after that
+  assert.equal(rows.New.days, 1);
+  assert.equal(rows.Old.days, 2);
+  assert.equal(rows.Old.date, day + 2 * DAY);
+  // everything seen: no date
+  for (const w of list) w.cards.meaning = { state: 'review', due: now + DAY, s: 1, d: 5, reps: 1, lapses: 0, last: now, firstAt: now };
+  assert.equal(tagProgress(now).find((r) => r.tag === 'New').days, null);
 });

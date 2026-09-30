@@ -7,6 +7,7 @@ import { createServer } from 'node:http';
 import { extname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import worker from '../src/worker.js';
+import { SECURITY_HEADERS } from '../src/headers.js';
 import { openD1 } from './d1-sqlite.mjs';
 
 crypto.subtle.timingSafeEqual ??= (a, b) => timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -60,6 +61,7 @@ async function serveApi(req, res, env) {
 
 export function createApp(env) {
   return createServer((req, res) => {
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
     const handler = req.url.startsWith('/api/') ? serveApi(req, res, env) : serveStatic(req, res);
     handler.catch((err) => {
       console.error(err);

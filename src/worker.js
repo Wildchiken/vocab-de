@@ -1,3 +1,5 @@
+import { SECURITY_HEADERS } from './headers.js';
+
 const PULL_LIMIT = 1000;
 const MAX_CHANGES = 500;
 const MAX_BODY = 5 * 1024 * 1024;
@@ -7,7 +9,7 @@ let schemaReady = false;
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
+    if (!url.pathname.startsWith('/api/')) return withSecurityHeaders(await env.ASSETS.fetch(request));
 
     try {
       if (!(await authorized(request, env))) return json({ error: 'unauthorized' }, 401);
@@ -28,10 +30,17 @@ export default {
   },
 };
 
+// Assets are served through the Worker (see run_worker_first) so they carry the same headers.
+function withSecurityHeaders(res) {
+  const out = new Response(res.body, res);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) out.headers.set(name, value);
+  return out;
+}
+
 function json(body, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+    headers: { ...SECURITY_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
   });
 }
 

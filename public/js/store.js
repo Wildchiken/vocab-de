@@ -1,14 +1,19 @@
 import { idb } from './db.js';
-import { newCard, schedule, previewAll, dayStart, DAY, MIN, DEFAULT_PARAMS } from './fsrs.js';
+import { newCard, schedule, recheck, rechecking, dayStart, DAY, MIN } from './fsrs.js';
 import { ARTICLES } from './german.js';
 
-export const CARD_TYPES = ['meaning', 'article', 'spell'];
+// Scheduled cards. A noun's article is asked on its meaning card, not on a card of its own.
+export const CARD_TYPES = ['meaning', 'spell'];
+// What statistics report on: article picks are counted separately.
+export const STAT_TYPES = ['meaning', 'article', 'spell'];
 
 export const DEFAULT_SETTINGS = {
   newPerDay: 20,
-  spell: true,
+  spell: false,
+  articleFirst: true,
   retention: 0.9,
   autoSpeak: true,
+  sound: true,
   updatedAt: 0,
 };
 
@@ -156,6 +161,7 @@ export async function deleteWord(w) {
 
 export async function resetProgress(w) {
   w.cards = { meaning: newCard() };
+  w.artMiss = 0;
   w.resetAt = Date.now();
   await saveWord(w);
 }
@@ -177,12 +183,16 @@ export function getCard(w, type) {
   return w.cards[type] || newCard();
 }
 
+export const hasArticle = (w) => w.pos === 'noun' && ARTICLES.includes(w.article);
+
+// Article mistakes, including those from article cards of earlier versions.
+export const articleMisses = (w) => (w.artMiss || 0) + (w.cards.article?.lapses || 0);
+
 export function eligible(w, type) {
   if (type === 'meaning') return true;
   const m = getCard(w, 'meaning');
-  if (type === 'article') return w.pos === 'noun' && ARTICLES.includes(w.article) && m.reps > 0;
   // Spelling is the hardest direction, so it waits until the meaning has held for a while.
-  if (type === 'spell') return state.settings.spell && Boolean(w.zh) && m.state === 'review' && m.reps >= 3 && m.s >= 7;
+  if (type === 'spell') return state.settings.spell && Boolean(w.zh) && m.state === 'review' && m.reps >= 2 && m.s >= 7;
   return false;
 }
 
@@ -202,10 +212,10 @@ function reviewsDone(since) {
 
 function scan(types, now) {
   const today = dayStart(now);
-  const introduced = { meaning: 0, article: 0, spell: 0 };
-  const news = { meaning: [], article: [], spell: [] };
+  const introduced = { meaning: 0, spell: 0 };
+  const news = { meaning: [], spell: [] };
   const reviews = [];
-  const learning = [];
+  const rechecks = [];
   for (const w of state.words.values()) {
     if (w.deleted) continue;
     for (const t of CARD_TYPES) {
@@ -217,7 +227,7 @@ function scan(types, now) {
       if (!eligible(w, t)) continue;
       const c = getCard(w, t);
       if (c.state === 'new') news[t].push(w);
-      else if (c.state === 'learning' || c.state === 'relearning') learning.push({ w, t, c });
+      else if (rechecking(c, now)) rechecks.push({ w, t, c });
       else if (c.due <= now) reviews.push({ w, t, c });
     }
   }
@@ -230,52 +240,23 @@ function scan(types, now) {
   const overflow = allDue - reviews.length;
   const paused = overflow > 0 && !ex.force;
   // Article cards follow the nouns just learned, so their limit moves with the new words.
-  const limits = paused
-    ? { meaning: ex.n, article: ex.n, spell: 0 }
-    : { meaning: s.newPerDay + ex.n, article: 2 * s.newPerDay + ex.n, spell: s.spell ? s.newPerDay : 0 };
+  const limits = paused ? { meaning: ex.n, spell: 0 } : { meaning: s.newPerDay + ex.n, spell: s.spell ? s.newPerDay : 0 };
   const newLeft = {};
   for (const t of CARD_TYPES) newLeft[t] = Math.max(0, Math.min(news[t].length, limits[t] - introduced[t]));
-  return { news, reviews, learning, newLeft, introduced, limits, overflow, paused };
+  return { news, reviews, rechecks, newLeft, overflow, paused };
 }
 
 export function todayCounts(now = Date.now()) {
-  const { reviews, learning, newLeft, news, introduced, limits, overflow, paused } = scan(CARD_TYPES, now);
-  const due = { meaning: 0, article: 0, spell: 0 };
+  const { reviews, rechecks, newLeft, news, overflow, paused } = scan(CARD_TYPES, now);
+  const due = { meaning: 0, spell: 0 };
   for (const r of reviews) due[r.t]++;
-  for (const l of learning) if (l.c.due <= now + 20 * MIN) due[l.t]++;
-  const total = due.meaning + due.article + due.spell + newLeft.meaning + newLeft.article + newLeft.spell;
-  // Nouns introduced today unlock an article card right after; counting them up front keeps
-  // the session progress from growing as you go.
-  const upcomingNouns = [...news.meaning]
-    .sort(newOrder)
-    .slice(0, newLeft.meaning)
-    .filter((w) => w.pos === 'noun' && ARTICLES.includes(w.article)).length;
-  const articleRoom = Math.max(0, limits.article - introduced.article - newLeft.article);
-  const upcomingArticles = Math.min(upcomingNouns, articleRoom);
-
-  // Answers still needed today, per card type: new cards go through every learning step,
-  // so counting answers rather than cards keeps session progress from drifting backwards.
-  const learnSteps = DEFAULT_PARAMS.learnSteps.length;
-  const answersLeft = { meaning: 0, article: 0, spell: 0 };
-  for (const r of reviews) answersLeft[r.t]++;
-  for (const l of learning) {
-    if (l.c.due > now + 20 * MIN) continue;
-    const steps = l.c.state === 'learning' ? learnSteps : DEFAULT_PARAMS.relearnSteps.length;
-    answersLeft[l.t] += Math.max(1, steps - (l.c.step || 0));
-  }
-  for (const t of CARD_TYPES) answersLeft[t] += newLeft[t] * learnSteps;
-
-  return {
-    due,
-    newLeft,
-    total,
-    unseen: news.meaning.length,
-    upcomingArticles,
-    upcomingAnswers: upcomingArticles * learnSteps,
-    answersLeft,
-    overflow,
-    paused,
-  };
+  for (const r of rechecks) due[r.t]++;
+  const total = due.meaning + due.spell + newLeft.meaning + newLeft.spell;
+  // Answers still needed today: a new word is usually not known at first sight and comes back
+  // once more, so it counts twice; counting answers keeps the progress bar from sliding back.
+  const answersLeft = { meaning: 0, spell: 0 };
+  for (const t of CARD_TYPES) answersLeft[t] = due[t] + 2 * newLeft[t];
+  return { due, newLeft, total, unseen: news.meaning.length, answersLeft, overflow, paused };
 }
 
 export async function addExtraNew(n, now = Date.now(), force = false) {
@@ -285,16 +266,16 @@ export async function addExtraNew(n, now = Date.now(), force = false) {
   await idb.setKV('extraNew', state.extraNew);
 }
 
-const NEW_ORDER = ['article', 'meaning', 'spell'];
+const NEW_ORDER = ['meaning', 'spell'];
 
 // session: { types, sinceNew, lastWordId }
 export function pickNext(session, now = Date.now()) {
-  const { news, reviews, learning, newLeft } = scan(session.types, now);
+  const { news, reviews, rechecks, newLeft } = scan(session.types, now);
   const notLast = (x) => x.w.id !== session.lastWordId;
 
-  const learnDue = learning.filter((l) => l.c.due <= now).sort((a, b) => a.c.due - b.c.due);
-  const ld = learnDue.find(notLast);
-  if (ld) return ld;
+  rechecks.sort((a, b) => a.c.recheck - b.c.recheck);
+  const again = rechecks.find((r) => r.c.recheck <= now && notLast(r));
+  if (again) return again;
 
   const review = reviews.find(notLast);
 
@@ -303,8 +284,7 @@ export function pickNext(session, now = Date.now()) {
     if (!session.types.includes(t) || !newLeft[t]) continue;
     const list = news[t].filter((w) => w.id !== session.lastWordId);
     if (!list.length) continue;
-    if (t === 'article') list.sort((a, b) => getCard(a, 'meaning').firstAt - getCard(b, 'meaning').firstAt);
-    else list.sort(newOrder);
+    list.sort(t === 'spell' ? (a, b) => getCard(a, 'meaning').firstAt - getCard(b, 'meaning').firstAt : newOrder);
     fresh = { w: list[0], t, c: getCard(list[0], t) };
     break;
   }
@@ -317,25 +297,20 @@ export function pickNext(session, now = Date.now()) {
     session.sinceNew = 0;
     return fresh;
   }
-  if (learnDue[0]) return learnDue[0];
-  // Nothing else left: show learning cards due within the next 20 minutes early.
-  const soon = learning.filter((l) => l.c.due <= now + 20 * MIN).sort((a, b) => a.c.due - b.c.due);
-  // Never repeat the card just answered: wait for its step instead of showing it twice in a row.
-  return soon.find(notLast) || null;
+  // Nothing else left: words to see again soon can come a little early, but never the one
+  // just answered twice in a row.
+  return rechecks.find((r) => r.c.recheck <= now + 20 * MIN && notLast(r)) || null;
 }
 
-export function preview(w, type, now = Date.now()) {
-  return previewAll(getCard(w, type), now, params());
-}
-
-// Returns a snapshot for undo.
-export async function answer(w, type, rating, elapsedMs, now = Date.now()) {
+// Returns a snapshot for undo. `article` is the article picked on a noun's card, if one was
+// asked: it is stored on the same log entry (a: 1 right, 0 wrong or skipped).
+export async function answer(w, type, rating, elapsedMs, now = Date.now(), article = null) {
   // Sync may have replaced the object since the card was shown; build on the latest copy.
   w = state.words.get(w.id) || w;
   const before = JSON.parse(JSON.stringify(w));
   const prev = getCard(w, type);
-  const next = schedule(prev, rating, now, params());
-  w.cards = { ...w.cards, [type]: next };
+  const same = rechecking(prev, now);
+  w.cards = { ...w.cards, [type]: same ? recheck(prev, rating, now) : schedule(prev, rating, now, params()) };
   const log = {
     id: uid(),
     w: w.id,
@@ -343,33 +318,45 @@ export async function answer(w, type, rating, elapsedMs, now = Date.now()) {
     g: rating,
     ts: now,
     ms: Math.round(Math.min(elapsedMs, 120_000)),
-    st: prev.state,
+    st: same ? 'recheck' : prev.state,
     synced: false,
   };
+  if (article) {
+    log.a = article.ok ? 1 : 0;
+    if (!article.ok) w.artMiss = (w.artMiss || 0) + 1;
+  }
   state.logs.push(log);
   await idb.put('logs', log);
   await saveWord(w);
-  return { before, logId: log.id };
+  return { before, logIds: [log.id] };
 }
 
 export async function undo(snap) {
   const w = snap.before;
   await saveWord(w);
-  state.logs = state.logs.filter((l) => l.id !== snap.logId);
-  await idb.del('logs', snap.logId);
+  const ids = new Set(snap.logIds);
+  state.logs = state.logs.filter((l) => !ids.has(l.id));
+  await Promise.all(snap.logIds.map((id) => idb.del('logs', id)));
   return w;
+}
+
+// A missed article in free practice: counted, but the schedule is left alone.
+export async function missArticle(w) {
+  w = state.words.get(w.id) || w;
+  w.artMiss = (w.artMiss || 0) + 1;
+  await saveWord(w);
 }
 
 // Weighted random pick for free article practice: frequently missed nouns come up more.
 export function drillPool() {
-  return liveWords().filter((w) => !w.suspended && eligible(w, 'article'));
+  return liveWords().filter((w) => !w.suspended && hasArticle(w) && getCard(w, 'meaning').state !== 'new');
 }
 
 export function pickDrill(pool, recent) {
   const cand = pool.filter((w) => !recent.includes(w.id));
   const list = cand.length ? cand : pool;
   if (!list.length) return null;
-  const weight = (w) => 1 + 2 * (getCard(w, 'article').lapses || 0) + (getCard(w, 'article').state === 'new' ? 1 : 0);
+  const weight = (w) => 1 + 2 * articleMisses(w);
   let total = list.reduce((s, w) => s + weight(w), 0);
   let r = Math.random() * total;
   for (const w of list) {
@@ -383,11 +370,45 @@ export function wordStatus(w) {
   if (w.suspended) return 'suspended';
   const m = getCard(w, 'meaning');
   if (m.state === 'new') return 'new';
-  if (m.state !== 'review') return 'learning';
+  if (m.state !== 'review' || m.s < 3) return 'learning';
   return m.s >= 21 ? 'mature' : 'young';
 }
 
 export const STATUSES = ['new', 'learning', 'young', 'mature', 'suspended'];
+
+/**
+ * Progress of each word list (tag): words seen at least once, and the day the last unseen
+ * one should come up at the current pace. New words are taken newest batch first, so a list
+ * waiting behind a newer one is estimated accordingly.
+ */
+export function tagProgress(now = Date.now()) {
+  const today = dayStart(now);
+  const words = liveWords();
+  const queue = words.filter((w) => !w.suspended && getCard(w, 'meaning').state === 'new').sort(newOrder);
+  const lastPos = new Map();
+  queue.forEach((w, i) => {
+    for (const tag of w.tags || []) lastPos.set(tag, i + 1);
+  });
+  const perDay = Math.max(1, state.settings.newPerDay);
+  const introduced = words.filter((w) => w.cards.meaning?.firstAt >= today).length;
+  const left = Math.max(0, perDay - introduced);
+  const rows = new Map();
+  for (const w of words) {
+    for (const tag of w.tags || []) {
+      const r = rows.get(tag) ?? { tag, total: 0, seen: 0, mature: 0, days: null };
+      r.total++;
+      if (getCard(w, 'meaning').state !== 'new') r.seen++;
+      if (wordStatus(w) === 'mature') r.mature++;
+      rows.set(tag, r);
+    }
+  }
+  for (const r of rows.values()) {
+    const k = lastPos.get(r.tag);
+    if (k) r.days = k <= left ? 0 : Math.ceil((k - left) / perDay);
+    if (r.days !== null) r.date = today + r.days * DAY;
+  }
+  return allTags().map((tag) => rows.get(tag));
+}
 
 export function stats(now = Date.now()) {
   const today = dayStart(now);
@@ -399,11 +420,24 @@ export function stats(now = Date.now()) {
   const firstDay = today - 13 * DAY;
   const perDay = Array.from({ length: 14 }, () => 0);
   const ret = { meaning: [0, 0], article: [0, 0], spell: [0, 0] };
+  const add = (type, ok) => {
+    ret[type][0]++;
+    if (ok) ret[type][1]++;
+  };
   const days = new Set();
   let todayReviews = 0;
   let todayMs = 0;
   for (const l of state.logs) {
     days.add(dayStart(l.ts));
+    if (l.ts >= since30) {
+      // An article is picked on the meaning card (a); older versions had article cards and,
+      // briefly, separate pick entries.
+      if (l.a !== undefined) add('article', l.a === 1);
+      if (l.t === 'article') {
+        if (l.st === 'review' || l.st === 'pick') add('article', l.g > 1);
+      } else if (l.st === 'review' && ret[l.t]) add(l.t, l.g > 1);
+    }
+    if (l.st === 'pick') continue;
     if (l.ts >= today) {
       todayReviews++;
       todayMs += l.ms || 0;
@@ -411,10 +445,6 @@ export function stats(now = Date.now()) {
     if (l.ts >= firstDay) {
       const i = Math.floor((dayStart(l.ts) - firstDay) / DAY + 0.5);
       if (i >= 0 && i < 14) perDay[i]++;
-    }
-    if (l.ts >= since30 && l.st === 'review' && ret[l.t]) {
-      ret[l.t][0]++;
-      if (l.g > 1) ret[l.t][1]++;
     }
   }
   let streak = 0;
@@ -424,7 +454,7 @@ export function stats(now = Date.now()) {
     d = dayStart(d - DAY / 2);
   }
   const retention = {};
-  for (const t of CARD_TYPES) retention[t] = ret[t][0] ? ret[t][1] / ret[t][0] : null;
+  for (const t of STAT_TYPES) retention[t] = ret[t][0] ? ret[t][1] / ret[t][0] : null;
 
   const forecast = Array.from({ length: 7 }, () => 0);
   for (const w of words) {
@@ -437,7 +467,7 @@ export function stats(now = Date.now()) {
     }
   }
 
-  const lapsesOf = (w) => CARD_TYPES.reduce((n, t) => n + (w.cards[t]?.lapses || 0), 0);
+  const lapsesOf = (w) => (w.cards.meaning?.lapses || 0) + (w.cards.spell?.lapses || 0) + articleMisses(w);
   const hardWords = words
     .filter((w) => lapsesOf(w) >= 3)
     .sort((a, b) => lapsesOf(b) - lapsesOf(a))
@@ -459,10 +489,11 @@ export function stats(now = Date.now()) {
 // Rough daily minutes about two months in, for a given number of new words a day. The
 // per-word factors come from simulating this scheduler at 90% recall; answer times are the
 // user's own once there are enough of them.
+const MEANING_PER_WORD = 10.5;
+const SPELL_PER_WORD = 7;
+
 export function estimateMinutes(newPerDay = state.settings.newPerDay) {
-  const words = liveWords();
-  const nouns = words.length ? words.filter((w) => w.pos === 'noun' && ARTICLES.includes(w.article)).length / words.length : 0.5;
-  const secs = { meaning: 7, article: 3, spell: 14 };
+  const secs = { meaning: 7.5, spell: 14 };
   for (const t of CARD_TYPES) {
     const ms = [];
     for (let i = state.logs.length - 1; i >= 0 && ms.length < 300; i--) {
@@ -471,7 +502,7 @@ export function estimateMinutes(newPerDay = state.settings.newPerDay) {
     }
     if (ms.length >= 30) secs[t] = ms.sort((a, b) => a - b)[ms.length >> 1] / 1000;
   }
-  const perWord = 7.8 * secs.meaning + 6.5 * nouns * secs.article + (state.settings.spell ? 4.7 * secs.spell : 0);
+  const perWord = MEANING_PER_WORD * secs.meaning + (state.settings.spell ? SPELL_PER_WORD * secs.spell : 0);
   return Math.round((newPerDay * perWord * 1.1) / 60);
 }
 
@@ -495,6 +526,12 @@ export function mergeWord(local, remote) {
   const merged = { ...remote, cards, createdAt: Math.min(local.createdAt, remote.createdAt), editedAt: editTime(src) };
   for (const k of META) if (k in src) merged[k] = src[k];
   if (resetAt) merged.resetAt = resetAt;
+  // Article misses only grow, except that a reset starts them over.
+  const lr = local.resetAt || 0;
+  const rr = remote.resetAt || 0;
+  const misses = lr === rr ? Math.max(local.artMiss || 0, remote.artMiss || 0) : ((lr > rr ? local : remote).artMiss || 0);
+  if (misses) merged.artMiss = misses;
+  else delete merged.artMiss;
   return merged;
 }
 

@@ -7,7 +7,8 @@
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"]
+    // every request goes through the Worker, which adds the security headers to the assets
+    "run_worker_first": true
   },
   "d1_databases": [
     {

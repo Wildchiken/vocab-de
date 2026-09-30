@@ -22,7 +22,7 @@ test('every key used in the UI exists', () => {
     ...['token', 'server', 'network'].map((k) => `sync.err.${k}`),
     ...['ok', 'near', 'bad'].map((k) => `spell.${k}`),
     ...['case', 'noArticle', 'wrongArticle', 'oneLetter', 'typos'].map((k) => `spell.why.${k}`),
-    ...[1, 2, 3, 4].map((g) => `rate.${g}`),
+    ...[1, 2, 3].map((g) => `rate.${g}`),
     ...RULE_IDS.map((id) => `rule.${id}`),
   ];
   for (const k of [...used, ...dynamic]) {
