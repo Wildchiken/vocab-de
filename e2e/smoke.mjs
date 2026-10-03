@@ -11,7 +11,7 @@ import { chromium, webkit } from 'playwright';
 import { createApp } from '../server/node.mjs';
 import { openD1 } from '../server/d1-sqlite.mjs';
 
-const server = createApp({ SYNC_TOKEN: 'smoke', DB: openD1(':memory:') });
+const server = createApp({ SYNC_TOKEN: 'smoke', SYNC_OPEN: '1', DB: openD1(':memory:') });
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}/`;
 const dir = await mkdtemp(join(tmpdir(), 'vocab-de-'));
@@ -126,6 +126,40 @@ async function run(name, engine) {
     // Word list progress
     await page.evaluate(() => (location.hash = '#stats'));
     await page.locator('.list-progress').first().waitFor();
+
+    // Sync: every password is its own library, so two people never see each other's words
+    const wordCount = (p) => p.evaluate(async () => (await import('/js/store.js')).liveWords().length);
+    const connect = async (p, token) => {
+      await p.evaluate(() => (location.hash = '#settings'));
+      await p.locator('#syncSwitch').check();
+      if (token) await p.locator('#token').fill(token);
+      else await p.locator('#genToken').tap();
+      const used = await p.locator('#token').inputValue();
+      await p.locator('#tokenBtn').tap();
+      await p.waitForFunction(() => document.getElementById('syncBtn').dataset.status === 'idle');
+      return used;
+    };
+    const alice = await connect(page, '');
+    assert.ok(alice.length >= 16, 'generated password is long enough');
+    // Switching a device that has words to another password asks first; cancelling keeps the old one
+    await page.evaluate(() => (location.hash = '#settings'));
+    await page.locator('#token').fill('some-other-password-123');
+    await page.locator('#tokenBtn').tap();
+    await page.locator('.dialog').waitFor();
+    await page.locator('.dialog [data-ok="0"]').tap();
+    assert.equal(await page.evaluate(async () => (await import('/js/sync.js')).sync.token), alice);
+    const other = await browser.newContext({ viewport: { width: 375, height: 812 }, hasTouch: true, locale: 'en-US' });
+    const second = await other.newPage();
+    await second.goto(base);
+    await connect(second, '');
+    assert.equal(await wordCount(second), 0, "another password must not see Alice's words");
+    const third = await (await browser.newContext({ viewport: { width: 375, height: 812 }, hasTouch: true, locale: 'en-US' })).newPage();
+    await third.goto(base);
+    await connect(third, alice);
+    await third.waitForFunction(async () => (await import('/js/store.js')).liveWords().length > 20);
+    assert.equal(await wordCount(third), await wordCount(page), "Alice's other device gets her words");
+    await other.close();
+    await third.context().close();
 
     assert.deepEqual(problems, [], 'errors in the page');
     console.log(`PASS ${name}`);

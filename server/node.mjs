@@ -1,6 +1,8 @@
 // Self-hosted server: serves public/ and the same /api as the Cloudflare Worker.
 //   SYNC_TOKEN=... node server/node.mjs
-// Environment: SYNC_TOKEN (enables sync), PORT (8787), HOST (0.0.0.0), DB_PATH (vocab-de.sqlite)
+// Environment: SYNC_TOKEN / SYNC_TOKENS (private list of sync tokens, one library each),
+// SYNC_OPEN=1 (any token of 16+ characters gets its own library), PORT (8787), HOST (0.0.0.0),
+// DB_PATH (vocab-de.sqlite)
 import { timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -72,8 +74,13 @@ export function createApp(env) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
-  const env = { SYNC_TOKEN: process.env.SYNC_TOKEN, DB: openD1(process.env.DB_PATH || 'vocab-de.sqlite') };
-  if (!env.SYNC_TOKEN) console.warn('SYNC_TOKEN is not set, so sync is off. The app itself still works.');
+  const { SYNC_TOKEN, SYNC_TOKENS, SYNC_OPEN } = process.env;
+  const env = { SYNC_TOKEN, SYNC_TOKENS, SYNC_OPEN, DB: openD1(process.env.DB_PATH || 'vocab-de.sqlite') };
+  const tokens = [SYNC_TOKEN, ...String(SYNC_TOKENS || '').split(/[\s,]+/)].filter(Boolean);
+  const open = /^(1|true|yes|on)$/i.test(String(SYNC_OPEN || ''));
+  if (!tokens.length && !open) console.warn('No SYNC_TOKEN, SYNC_TOKENS or SYNC_OPEN is set, so sync is off. The app itself still works.');
+  if (open) console.warn('SYNC_OPEN is on: anyone who can reach this server can create a library with a token of 16+ characters.');
+  if (tokens.some((t) => t.length < 16)) console.warn('Some sync tokens are shorter than 16 characters. Use long random ones.');
   const port = Number(process.env.PORT) || 8787;
   const host = process.env.HOST || '0.0.0.0';
   createApp(env).listen(port, host, () => console.log(`vocab-de on http://localhost:${port}`));

@@ -2190,6 +2190,19 @@ function stepperRow(name, label, value, ic, { min = 0, max = 300, step = 5 } = {
   </div>`;
 }
 
+// 24 characters from an alphabet without look-alikes (about 119 bits). Bytes that would make
+// the choice uneven are skipped.
+function newToken() {
+  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+  let out = '';
+  while (out.length < 24) {
+    for (const b of crypto.getRandomValues(new Uint8Array(32))) {
+      if (b < 248 && out.length < 24) out += chars[b % chars.length];
+    }
+  }
+  return out;
+}
+
 function settingsView() {
   setNav({ title: t('tab.settings') });
   const s = state.settings;
@@ -2247,7 +2260,7 @@ function settingsView() {
           <input class="bare" type="password" id="token" placeholder="${esc(t('set.tokenPh'))}" value="${esc(sync.token)}" autocomplete="off" enterkeyhint="go">
           <button class="btn small" id="tokenBtn"></button>
         </form>
-        ${sync.token ? `<button class="row action" id="syncNow">${t('set.syncNow')}</button>` : ''}
+        ${sync.token ? `<button class="row action" id="syncNow">${t('set.syncNow')}</button>` : `<button class="row action" id="genToken">${t('set.genToken')}</button>`}
         ${sync.token && navigator.clipboard ? `<button class="row action" id="copyToken">${t('set.copyToken')}</button>` : ''}`
             : ''
         }
@@ -2358,6 +2371,12 @@ function settingsView() {
       }
       if (!tokenInput.value) return;
     }
+    // The words on this device are uploaded into whichever library the password opens.
+    const next = tokenInput.value.trim();
+    const here = S.liveWords().length;
+    if (sync.token && next && next !== sync.token && here) {
+      if (!(await dialog({ message: t('set.confirmNewToken', { n: here }), confirm: t('dlg.connect') }))) return;
+    }
     tokenBtn.disabled = true;
     try {
       await setToken(tokenInput.value);
@@ -2367,6 +2386,12 @@ function settingsView() {
       toast(t(`sync.err.${err.code || 'server'}`), 3500);
       tokenBtn.disabled = false;
     }
+  });
+  $('#genToken')?.addEventListener('click', () => {
+    tokenInput.type = 'text';
+    tokenInput.value = newToken();
+    updateTokenBtn();
+    toast(t('set.tokenGenerated'), 5000);
   });
   $('#copyToken')?.addEventListener('click', async () => {
     await navigator.clipboard.writeText(sync.token);

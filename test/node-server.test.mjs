@@ -30,7 +30,7 @@ test('does not serve files outside public/', async () => {
 test('exposes the sync API', async () => {
   assert.equal((await fetch(`${base}/api/ping`)).status, 401);
   const ok = await fetch(`${base}/api/ping`, { headers: { authorization: 'Bearer secret' } });
-  assert.deepEqual(await ok.json(), { ok: true });
+  assert.deepEqual(await ok.json(), { ok: true, mode: 'private' });
   const res = await fetch(`${base}/api/sync`, {
     method: 'POST',
     headers: { authorization: 'Bearer secret', 'content-type': 'application/json' },

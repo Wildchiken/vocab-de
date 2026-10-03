@@ -58,7 +58,9 @@ npm start
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `SYNC_TOKEN` | not set | Password for sync. Without it the app works, but sync is off |
+| `SYNC_TOKEN` | not set | Sync password; each password is its own library. With none of the three sync variables set the app works, but sync is off |
+| `SYNC_TOKENS` | not set | More passwords, separated by commas or spaces, one per person, each with a separate library |
+| `SYNC_OPEN` | not set | Set to `1` and anyone who sends a password of 16+ characters gets a library of their own; for public instances |
 | `PORT` | `8787` | HTTP port |
 | `HOST` | `0.0.0.0` | Bind address; use `127.0.0.1` behind a local reverse proxy |
 | `DB_PATH` | `vocab-de.sqlite` | SQLite database path, relative to the working directory |
@@ -82,6 +84,8 @@ npx wrangler secret put SYNC_TOKEN
 npx wrangler deploy
 ```
 
+For several people, `npx wrangler secret put SYNC_TOKENS` with a list of passwords, or set `SYNC_OPEN` to `"1"` under `vars` in `wrangler.jsonc`.
+
 The database table is created on the first request.
 
 ### Static hosting, without sync
@@ -101,7 +105,9 @@ If your browser offers installation, these are the usual entry points:
 
 Do not assume browser tabs and installed apps share local data. Connect sync or import a JSON backup in the context you plan to use. Installation does not guarantee permanent storage.
 
-To enable sync, configure one backend and enter the same `SYNC_TOKEN` in Settings → Sync on each device. Keep the configured token; generating a new one at each restart disconnects existing clients. To connect another device, tap "Copy password for another device" in Settings on one device and "Paste" on the other.
+To enable sync, deploy a backend first. **One password opens one library**: use the same password on all your own devices in Settings → Sync, and have anyone else use theirs, so libraries stay separate. On a private deployment the administrator puts each person's password in `SYNC_TOKEN` / `SYNC_TOKENS`; on an open instance tap "Generate a new password" in Settings. The password is the key to your library, so keep it safe: a lost one cannot be recovered. To connect another device, tap "Copy password for another device" in Settings on one device and "Paste" on the other.
+
+When a device that already has words is switched to another password, those words merge into the new library, and the app asks first; on a device somebody else has used, erase its data in Settings before connecting.
 
 The interface follows your system language. You can change it under Settings → Language.
 
@@ -129,13 +135,15 @@ File import (Import from file on the Add screen, or Settings → Word list → I
 
 ## How sync works
 
-Clients first pull changes by a server sequence number, then upload their own. When a word was changed on two devices, the client merges the copies: text such as the meaning comes from the later edit, and each card from the later review, so an offline review on one device can't undo an edit made on another. The merge is uploaded again, so all devices converge. The server itself keeps the record with the newer update time. Device clocks that are far off can affect the result. Review logs sync by their own IDs. The Cloudflare Worker and the Node server serve the same API.
+Clients first pull changes by a server sequence number, then upload their own; sequence numbers and records are separate for each password. When a word was changed on two devices, the client merges the copies: text such as the meaning comes from the later edit, and each card from the later review, so an offline review on one device can't undo an edit made on another. The merge is uploaded again, so all devices converge. The server itself keeps the record with the newer update time. Device clocks that are far off can affect the result. Review logs sync by their own IDs. The Cloudflare Worker and the Node server serve the same API.
 
 ## Data and backup
 
 Words, review history and settings are stored locally. JSON export includes words, review history and settings. Import merges words and review history, and restores the settings when the backup's are newer. With sync off, the home screen reminds you once two weeks pass without a backup. CSV export is a word list without review history, and can be imported again. Clearing site data or browser storage eviction can remove local data. Export a backup before changing domains or browser profiles.
 
-Each sync deployment is one shared library, not a multi-user account system. Anyone with the sync token can read and change that library. The token protects `/api/*`; the app page itself is public. Use HTTPS in production. Sync is not end-to-end encrypted.
+Each sync password is its own library; there are no accounts, e-mail addresses or password recovery. The server stores only a hash of the password and keeps all records apart by it, so whoever holds a password can read and change that library and cannot see anyone else's. The password protects `/api/*`; the app page itself is public. On an open instance each library has a size limit (200,000 records, 64 KB each) but there is no other rate limiting, so put a public deployment behind a reverse proxy or Cloudflare rules that limit requests. Use HTTPS in production. Sync is not end-to-end encrypted: the server's administrator can read the libraries.
+
+When upgrading from the version with a single shared table, the existing data moves to the `SYNC_TOKEN` library on the first request and the old table is kept as `records_migrated`. Keep `SYNC_TOKEN` unchanged for the first start after upgrading.
 
 The Node backend uses SQLite WAL mode. Use a consistent SQLite backup, or stop the server and preserve the database plus any remaining `-wal` file before restarting. Copying only the main database while it is running can omit recent writes. D1 backups are managed separately through Cloudflare.
 

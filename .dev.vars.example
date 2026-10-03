@@ -1,1 +1,5 @@
 SYNC_TOKEN=replace-with-a-local-development-token
+# more people, one password each:
+# SYNC_TOKENS=another-long-random-password,and-another-one
+# anyone with a 16+ character password gets their own library:
+# SYNC_OPEN=1
