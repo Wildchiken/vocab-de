@@ -15,15 +15,28 @@ export default {
       await ensureSchema(env);
 
       if (url.pathname === '/api/ping' && request.method === 'GET') {
-        return json({ ok: true, mode: isOpen(env) ? 'open' : 'private' });
+        // The number of words lets a device that is about to connect ask what to do with its own.
+        const { results } = await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM library WHERE owner = ?1 AND kind = 'word' AND deleted = 0",
+        )
+          .bind(owner)
+          .all();
+        return json({ ok: true, mode: isOpen(env) ? 'open' : 'private', words: results[0].n });
       }
       if (url.pathname === '/api/sync' && request.method === 'POST') {
         return json(await sync(env, owner, await readJson(request)));
       }
-      // Deletes this password's whole library, e.g. when someone erases everything.
+      // Erases this password's whole library. The epoch moves on, so a device that still holds
+      // the old data finds out on its next sync and clears itself instead of uploading it again.
       if (url.pathname === '/api/wipe' && request.method === 'POST') {
-        await env.DB.prepare('DELETE FROM library WHERE owner = ?1').bind(owner).run();
-        return json({ ok: true });
+        const epoch = Math.max(Date.now(), (await libraryEpoch(env, owner)) + 1);
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM library WHERE owner = ?1').bind(owner),
+          env.DB.prepare(
+            'INSERT INTO library_state (owner, epoch) VALUES (?1, ?2) ON CONFLICT (owner) DO UPDATE SET epoch = excluded.epoch',
+          ).bind(owner, epoch),
+        ]);
+        return json({ ok: true, epoch });
       }
       return json({ error: 'not found' }, 404);
     } catch (err) {
@@ -72,6 +85,9 @@ const MIN_OPEN_TOKEN = 16;
 const MAX_TOKEN = 128;
 const MAX_RECORD_BYTES = 64 * 1024;
 const MAX_RECORDS = 200_000;
+// The size of a library is only counted when its write counter passes a multiple of this,
+// which keeps counting (D1 bills the rows it reads) off the everyday sync.
+const COUNT_EVERY = 1000;
 
 const tokenList = (env) => [...new Set([env.SYNC_TOKEN, ...String(env.SYNC_TOKENS || '').split(/[\s,]+/)].filter(Boolean))];
 const isOpen = (env) => /^(1|true|yes|on)$/i.test(String(env.SYNC_OPEN || ''));
@@ -114,6 +130,7 @@ async function ensureSchema(env) {
         PRIMARY KEY (owner, kind, id))`,
     ),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_library_seq ON library (owner, seq)'),
+    env.DB.prepare('CREATE TABLE IF NOT EXISTS library_state (owner TEXT PRIMARY KEY, epoch INTEGER NOT NULL DEFAULT 0)'),
   ]);
   // Earlier versions had a single table with no owner. Its rows become the library of the
   // SYNC_TOKEN password and nobody else's. The old table is kept under another name in case a
@@ -138,15 +155,31 @@ async function ensureSchema(env) {
   ready.add(env.DB);
 }
 
+async function libraryEpoch(env, owner) {
+  const { results } = await env.DB.prepare('SELECT epoch FROM library_state WHERE owner = ?1').bind(owner).all();
+  return results.length ? results[0].epoch : 0;
+}
+
 // Applies client changes (last write wins by updated_at), then returns rows with seq > since.
+// A client says which epoch of the library it knows; if the library was erased since, it gets
+// `reset` instead and has to start over.
 async function sync(env, owner, body) {
   const since = Number(body.since) || 0;
   const changes = Array.isArray(body.changes) ? body.changes : [];
   if (changes.length > MAX_CHANGES) throw new HttpError(413, `at most ${MAX_CHANGES} changes per request`);
 
+  const epoch = await libraryEpoch(env, owner);
+  if (typeof body.epoch === 'number' && body.epoch !== epoch) {
+    return { reset: true, epoch, rows: [], cursor: 0, more: false, accepted: 0 };
+  }
+
   if (changes.length) {
-    const { results } = await env.DB.prepare('SELECT COUNT(*) AS n FROM library WHERE owner = ?1').bind(owner).all();
-    if (results[0].n + changes.length > MAX_RECORDS) throw new HttpError(413, 'library is full');
+    const { results } = await env.DB.prepare('SELECT COALESCE(MAX(seq), 0) AS top FROM library WHERE owner = ?1').bind(owner).all();
+    const top = results[0].top;
+    if (Math.floor((top + changes.length) / COUNT_EVERY) > Math.floor(top / COUNT_EVERY)) {
+      const { results: count } = await env.DB.prepare('SELECT COUNT(*) AS n FROM library WHERE owner = ?1').bind(owner).all();
+      if (count[0].n + changes.length > (Number(env.SYNC_MAX_RECORDS) || MAX_RECORDS)) throw new HttpError(413, 'library is full');
+    }
   }
 
   const upsert = env.DB.prepare(
@@ -180,5 +213,5 @@ async function sync(env, owner, body) {
     data: JSON.parse(r.data),
   }));
   const cursor = results.length ? results[results.length - 1].seq : since;
-  return { rows, cursor, more: results.length === PULL_LIMIT, accepted: stmts.length };
+  return { rows, cursor, epoch, more: results.length === PULL_LIMIT, accepted: stmts.length };
 }

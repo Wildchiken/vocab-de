@@ -1,6 +1,6 @@
 import * as S from './store.js';
 import { state } from './store.js';
-import { sync, initSync, setToken, syncNow, wipeRemote, onSyncChange, onRemoteChange } from './sync.js';
+import { sync, initSync, setToken, syncNow, wipeRemote, peek, onSyncChange, onRemoteChange, onLibraryReset } from './sync.js';
 import {
   parseLine,
   isIncomplete,
@@ -101,7 +101,8 @@ function toast(msg, opts = {}) {
 
 // In-app alert. Native confirm()/prompt() are blocked in some embedded browsers and return
 // "cancel" immediately, which made actions silently do nothing.
-function dialog({ message, confirm: okLabel = t('ok'), destructive = false, input = null }) {
+// Resolves to true or false, or to 2 when the optional `alt` button is chosen.
+function dialog({ message, confirm: okLabel = t('ok'), destructive = false, input = null, alt = null }) {
   return new Promise((resolve) => {
     const prev = document.activeElement;
     const el = document.createElement('div');
@@ -109,8 +110,9 @@ function dialog({ message, confirm: okLabel = t('ok'), destructive = false, inpu
     el.innerHTML = `<div class="dialog glass" role="alertdialog" aria-modal="true" aria-labelledby="dlgMsg">
       <p id="dlgMsg">${esc(message)}</p>
       ${input ? `<input class="dialog-input" placeholder="${esc(input.placeholder || '')}" autocomplete="off">` : ''}
-      <div class="dialog-buttons">
+      <div class="dialog-buttons ${alt ? 'three' : ''}">
         <button type="button" data-ok="0">${t('cancel')}</button>
+        ${alt ? `<button type="button" data-ok="2">${esc(alt)}</button>` : ''}
         <button type="button" data-ok="1" class="${destructive ? 'destructive' : 'primary'}">${esc(okLabel)}</button>
       </div>
     </div>`;
@@ -138,7 +140,7 @@ function dialog({ message, confirm: okLabel = t('ok'), destructive = false, inpu
     document.addEventListener('keydown', onKey, true);
     el.addEventListener('click', (e) => {
       const b = e.target.closest('button');
-      if (b) close(b.dataset.ok === '1');
+      if (b) close(b.dataset.ok === '2' ? 2 : b.dataset.ok === '1');
       else if (e.target === el) close(false);
     });
     (field || el.querySelector('[data-ok="1"]')).focus();
@@ -2190,6 +2192,22 @@ function stepperRow(name, label, value, ic, { min = 0, max = 300, step = 5 } = {
   </div>`;
 }
 
+// Before connecting a device that already has words: 'merge' (upload them), 'cloud' (drop them
+// and use what the library has) or null (cancel). Nothing to ask when the library is empty and
+// the words are this device's own.
+async function chooseLibrary(token) {
+  const here = S.liveWords().length;
+  const switching = Boolean(sync.token);
+  const { words } = await peek(token);
+  if (!switching && words === 0) return 'merge';
+  const pick = await dialog({
+    message: t(switching ? 'set.switchLibrary' : 'set.mergeLibrary', { n: here, cloud: words ?? '?' }),
+    confirm: t('dlg.merge'),
+    alt: t('dlg.useCloud'),
+  });
+  return pick === 2 ? 'cloud' : pick ? 'merge' : null;
+}
+
 // 24 characters from an alphabet without look-alikes (about 119 bits). Bytes that would make
 // the choice uneven are skipped.
 function newToken() {
@@ -2371,14 +2389,23 @@ function settingsView() {
       }
       if (!tokenInput.value) return;
     }
-    // The words on this device are uploaded into whichever library the password opens.
+    // The words on this device are uploaded into whichever library the password opens, so
+    // when it already has words, or they came from another password, ask first.
     const next = tokenInput.value.trim();
-    const here = S.liveWords().length;
-    if (sync.token && next && next !== sync.token && here) {
-      if (!(await dialog({ message: t('set.confirmNewToken', { n: here }), confirm: t('dlg.connect') }))) return;
+    let useCloudOnly = false;
+    if (next && next !== sync.token && S.liveWords().length) {
+      let pick;
+      try {
+        pick = await chooseLibrary(next);
+      } catch (err) {
+        return toast(t(`sync.err.${err.code || 'server'}`), 3500);
+      }
+      if (!pick) return;
+      useCloudOnly = pick === 'cloud';
     }
     tokenBtn.disabled = true;
     try {
+      if (useCloudOnly) await S.resetLocalLibrary();
       await setToken(tokenInput.value);
       toast(sync.token ? t('set.connected') : t('set.disconnected'));
       route();
@@ -2429,14 +2456,16 @@ function settingsView() {
     // nothing is deleted.
     const message = sync.token ? t('set.wipeSynced') : t('set.wipeLocal');
     if (!(await dialog({ message, confirm: t('dlg.erase'), destructive: true }))) return;
-    if (sync.token) {
+    const synced = Boolean(sync.token);
+    if (synced) {
       try {
         await wipeRemote();
       } catch {
         return toast(t('set.wipeFailed'), 4000);
       }
     }
-    await S.wipeLocal();
+    // A synced device stays connected: it keeps its password and starts over on the empty library.
+    await S.wipeLocal(synced ? ['token', 'epoch'] : []);
     location.reload();
   });
 }
@@ -2461,6 +2490,11 @@ async function boot() {
     if (refreshView) return refreshView();
     const typing = ['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName);
     if (!typing && ['home', 'stats'].includes(current)) route();
+  });
+  // The library was erased on another device and this one cleared itself to match.
+  onLibraryReset(() => {
+    toast(t('sync.wiped'), 6000);
+    if (!['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) route();
   });
   renderSync();
   window.addEventListener('hashchange', route);

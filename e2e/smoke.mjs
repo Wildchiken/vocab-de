@@ -160,19 +160,47 @@ async function run(name, engine) {
     assert.equal(await wordCount(third), await wordCount(page), "Alice's other device gets her words");
     await other.close();
 
-    // Erasing with sync on removes the cloud library too; otherwise the next sync would bring everything back
+    // Erasing with sync on empties the cloud library, and the other devices clear themselves too
+    const syncAs = (p) => p.evaluate(async () => (await import('/js/sync.js')).syncNow());
     await page.evaluate(() => (location.hash = '#settings'));
     await page.locator('#wipe').tap();
     await page.locator('.dialog [data-ok="1"]').tap();
     await page.waitForFunction(async () => (await import('/js/store.js')).liveWords().length === 0);
     await page.waitForTimeout(500);
     assert.equal(await wordCount(page), 0, 'erased words came back');
+    assert.equal(await page.evaluate(async () => (await import('/js/sync.js')).sync.token), alice, 'the device should stay connected');
+    await syncAs(third);
+    await third.waitForFunction(async () => (await import('/js/store.js')).liveWords().length === 0);
+
+    // Words added after the erase reach the other device although the library counts from 1 again
+    await page.evaluate(async () => {
+      const S = await import('/js/store.js');
+      await S.addWords([S.makeWord({ lemma: 'Neu', zh: 'new' }), S.makeWord({ lemma: 'Alt', zh: 'old' })]);
+    });
+    await syncAs(page);
+    await syncAs(third);
+    await third.waitForFunction(async () => (await import('/js/store.js')).liveWords().length === 2);
+    await third.context().close();
+
+    // A device with words of its own, connecting to a library that has words, is asked first
     const fourth = await (await browser.newContext({ viewport: { width: 375, height: 812 }, hasTouch: true, locale: 'en-US' })).newPage();
     await fourth.goto(base);
-    await connect(fourth, alice);
-    assert.equal(await wordCount(fourth), 0, 'the cloud library should be empty after erasing');
+    await fourth.locator('#trySample').tap();
+    await fourth.waitForFunction(async () => (await import('/js/store.js')).liveWords().length === 20);
+    await fourth.evaluate(() => (location.hash = '#settings'));
+    await fourth.locator('#syncSwitch').check();
+    await fourth.locator('#token').fill(alice);
+    await fourth.locator('#tokenBtn').tap();
+    await fourth.locator('.dialog').waitFor();
+    assert.equal(await fourth.locator('.dialog button').count(), 3);
+    await fourth.locator('.dialog [data-ok="2"]').tap();
+    await fourth.waitForFunction(() => document.getElementById('syncBtn').dataset.status === 'idle');
+    await fourth.waitForFunction(async () => (await import('/js/store.js')).liveWords().length === 2);
+    assert.ok(
+      await fourth.evaluate(async () => (await import('/js/store.js')).liveWords().every((w) => ['Neu', 'Alt'].includes(w.lemma))),
+      'the words of this device should have been dropped',
+    );
     await fourth.context().close();
-    await third.context().close();
 
     assert.deepEqual(problems, [], 'errors in the page');
     console.log(`PASS ${name}`);

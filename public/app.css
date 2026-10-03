@@ -699,6 +699,8 @@ body.selecting .tabbar { display: none; }
 }
 .dialog-input:focus { box-shadow: 0 0 0 2px var(--tint); }
 .dialog-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dialog-buttons.three { grid-template-columns: 1fr 1fr 1fr; }
+.dialog-buttons.three button { padding-left: 4px; padding-right: 4px; font-size: 0.95rem; }
 .dialog-buttons button {
   min-height: 46px; border: none; border-radius: 23px; font-size: 1rem; font-weight: 600; cursor: pointer;
   background: var(--fill); color: var(--label); transition: transform 0.2s var(--spring);

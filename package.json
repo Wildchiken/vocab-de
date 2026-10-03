@@ -1,6 +1,6 @@
 {
   "name": "vocab-de",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "German vocabulary trainer for modern browsers: FSRS review, article drills, offline study, and optional sync via Node.js/SQLite or Cloudflare D1.",
   "license": "MIT",

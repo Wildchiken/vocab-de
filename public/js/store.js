@@ -613,7 +613,26 @@ export async function importData(data) {
   return { words: words.length, logs: logs.length, settings };
 }
 
-export async function wipeLocal() {
+// Erases this device. `keep` lists kv entries that survive, such as the sync password and
+// epoch, so a device that has just erased the library stays connected to it.
+export async function wipeLocal(keep = []) {
+  const kept = [];
+  for (const key of keep) {
+    const row = await idb.get('kv', key);
+    if (row) kept.push(row);
+  }
   await Promise.all([idb.clear('words'), idb.clear('logs'), idb.clear('kv')]);
+  if (kept.length) await idb.putMany('kv', kept);
+}
+
+// Empties the words and review history, here and in memory. Settings stay and are sent to
+// the library again.
+export async function resetLocalLibrary() {
+  await Promise.all([idb.clear('words'), idb.clear('logs')]);
+  state.words = new Map();
+  state.logs = [];
+  state.settingsDirty = true;
+  await idb.setKV('settings', { value: state.settings, dirty: true });
+  emit();
 }
 

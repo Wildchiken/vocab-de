@@ -1,11 +1,12 @@
 import { idb } from './db.js';
-import { state, markSettingsClean, markAllDirty, onChange, reconcile } from './store.js';
+import { state, markSettingsClean, markAllDirty, onChange, reconcile, resetLocalLibrary } from './store.js';
 
 const BATCH = 400;
 
 export const sync = {
   token: '',
   cursor: 0,
+  epoch: null, // which erase-generation of the library this device has seen; null: unknown yet
   lastSync: 0,
   status: 'off', // off | idle | syncing | pending | error | offline
   error: '', // token | server | network
@@ -22,6 +23,7 @@ function setStatus(status, error = '') {
 export async function initSync() {
   sync.token = await idb.getKV('token', '');
   sync.cursor = await idb.getKV('cursor', 0);
+  sync.epoch = await idb.getKV('epoch', null);
   sync.lastSync = await idb.getKV('lastSync', 0);
   setStatus(sync.token ? 'idle' : 'off');
 
@@ -92,7 +94,9 @@ export async function setToken(token) {
     // everything, otherwise records synced to the old server would never reach the new one.
     if (token && token !== sync.token) {
       sync.cursor = 0;
+      sync.epoch = null;
       await idb.setKV('cursor', 0);
+      await idb.setKV('epoch', null);
       await markAllDirty();
     }
     sync.token = token;
@@ -106,13 +110,23 @@ export async function setToken(token) {
   if (token) await syncNow();
 }
 
-/** Deletes this password's library on the server. Waits for a running sync so it can't refill it. */
+/** What a password opens, before connecting: { ok, mode, words }. Also checks the password. */
+export const peek = (token) => api('/api/ping', null, token);
+
+/** Erases this password's library on the server. Waits for a running sync so it can't refill it. */
 export async function wipeRemote() {
   await running;
-  await api('/api/wipe', {});
+  const res = await api('/api/wipe', {});
   sync.cursor = 0;
+  sync.epoch = res.epoch ?? null;
   await idb.setKV('cursor', 0);
+  await idb.setKV('epoch', sync.epoch);
 }
+
+// Called after a sync found that the library was erased from another device and this one
+// cleared itself to match.
+const resetListeners = new Set();
+export const onLibraryReset = (fn) => resetListeners.add(fn);
 
 function collect() {
   const changes = [];
@@ -201,24 +215,49 @@ export function syncNow() {
     setStatus('syncing');
     try {
       let changed = false;
+      let wasReset = false;
       const round = async (batch) => {
-        const res = await api('/api/sync', { since: sync.cursor, changes: batch });
+        const res = await api('/api/sync', { since: sync.cursor, epoch: sync.epoch, changes: batch });
+        if (res.reset) {
+          // The library was erased from another device: what is here belongs to the old one.
+          await resetLocalLibrary();
+          sync.cursor = 0;
+          sync.epoch = res.epoch;
+          await idb.setKV('cursor', 0);
+          await idb.setKV('epoch', sync.epoch);
+          changed = wasReset = true;
+          return { reset: true, more: true };
+        }
         await markSent(batch);
         if (await applyRows(res.rows)) changed = true;
         sync.cursor = res.cursor;
         await idb.setKV('cursor', sync.cursor);
+        if (res.epoch !== undefined && sync.epoch === null) {
+          sync.epoch = res.epoch;
+          await idb.setKV('epoch', sync.epoch);
+        }
         return res;
+      };
+      const pull = async () => {
+        while ((await round([])).more);
       };
       // Pull first: local edits are merged with anything newer from other devices before
       // they are sent, instead of overwriting it.
-      while ((await round([])).more);
+      await pull();
       const changes = collect();
-      while (changes.length) await round(changes.splice(0, BATCH));
+      while (changes.length) {
+        if ((await round(changes.splice(0, BATCH))).reset) {
+          // erased in the meantime: the rest of these changes belong to the old library
+          changes.length = 0;
+          await pull();
+        }
+      }
       sync.lastSync = Date.now();
       await idb.setKV('lastSync', sync.lastSync);
       failures = 0;
       setStatus(hasPending() ? 'pending' : 'idle');
       if (changed) emitRemote();
+      if (wasReset) resetListeners.forEach((fn) => fn());
     } catch (err) {
       setStatus(navigator.onLine ? 'error' : 'offline', err.code || 'server');
       // A wrong password won't fix itself; anything else is retried with backoff.

@@ -104,7 +104,7 @@ test('open mode: any long enough token gets its own library', async () => {
   const a = as(open, 'a-long-random-token-1');
   const b = as(open, 'another-long-token-22');
   const ping = await (await a('/api/ping')).json();
-  assert.deepEqual(ping, { ok: true, mode: 'open' });
+  assert.deepEqual(ping, { ok: true, mode: 'open', words: 0 });
   await a('/api/sync', { since: 0, changes: [word('w1', 'A')] });
   assert.equal((await pull(a)).length, 1);
   assert.equal((await pull(b)).length, 0);
@@ -162,4 +162,48 @@ test('wiping deletes only the caller\'s library', async () => {
   // a fresh library starts counting again from the beginning
   const res = await (await one('/api/sync', { since: 0, changes: [word('c', 'C')] })).json();
   assert.equal(res.rows.length, 1);
+});
+
+test('ping reports how many words the library holds', async () => {
+  const env = { SYNC_TOKEN: 'count-token', DB: openD1(':memory:') };
+  const call = as(env, 'count-token');
+  const deleted = { ...word('gone', 'x'), deleted: true };
+  await call('/api/sync', { since: 0, changes: [word('a', 'A'), word('b', 'B'), deleted, { kind: 'log', id: 'l1', updated_at: 1, data: {} }] });
+  assert.equal((await (await call('/api/ping')).json()).words, 2);
+});
+
+test('after an erase, devices that hold the old library are told to start over', async () => {
+  const env = { SYNC_TOKEN: 'epoch-token', DB: openD1(':memory:') };
+  const call = as(env, 'epoch-token');
+  const first = await (await call('/api/sync', { since: 0, epoch: null, changes: Array.from({ length: 5 }, (_, i) => word('w' + i, 'x')) })).json();
+  assert.equal(first.epoch, 0);
+  assert.equal(first.reset, undefined);
+  // another device with the same epoch just syncs
+  assert.equal((await (await call('/api/sync', { since: first.cursor, epoch: first.epoch, changes: [] })).json()).reset, undefined);
+
+  const { epoch } = await (await call('/api/wipe', {})).json();
+  assert.ok(epoch > 0);
+  // a device that still has the old epoch gets a reset, and its changes are not applied
+  const stale = await (await call('/api/sync', { since: first.cursor, epoch: first.epoch, changes: [word('late', 'old data')] })).json();
+  assert.deepEqual([stale.reset, stale.epoch, stale.rows.length, stale.accepted], [true, epoch, 0, 0]);
+  assert.deepEqual(await pull(call), []);
+
+  // after starting over, the new library counts from 1 and a new word reaches everyone
+  const fresh = await (await call('/api/sync', { since: 0, epoch, changes: [word('new', 'N')] })).json();
+  assert.deepEqual([fresh.epoch, fresh.cursor, fresh.reset], [epoch, 1, undefined]);
+  // a device that has never synced does not know an epoch yet and is not reset
+  assert.equal((await (await call('/api/sync', { since: 0, epoch: null, changes: [] })).json()).reset, undefined);
+  // erasing again moves the epoch on again
+  assert.ok((await (await call('/api/wipe', {})).json()).epoch > epoch);
+});
+
+test('a library that is full refuses more records, checked every 1000 writes', async () => {
+  const env = { SYNC_TOKEN: 'full-token', SYNC_MAX_RECORDS: '600', DB: openD1(':memory:') };
+  const call = as(env, 'full-token');
+  const batch = (from) => Array.from({ length: 500 }, (_, i) => word('w' + (from + i), 'x'));
+  assert.equal((await call('/api/sync', { since: 0, changes: batch(0) })).status, 200);
+  // the second batch carries the write counter past 1000, so this is where the size is checked
+  const res = await call('/api/sync', { since: 0, changes: batch(500) });
+  assert.equal(res.status, 413);
+  assert.equal((await pull(call)).length, 500);
 });

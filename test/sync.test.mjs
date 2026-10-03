@@ -40,3 +40,41 @@ test('switching libraries waits for a slow old pull and resets the new cursor', 
     if(previousNavigator)Object.defineProperty(globalThis,'navigator',previousNavigator);else delete globalThis.navigator;
   }
 });
+
+test('a library erased elsewhere clears this device and the old changes are not sent again', async () => {
+  const previousFetch = globalThis.fetch;
+  const previousNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value: { onLibraryReset: undefined, onLine: true }, configurable: true });
+  const requests = [];
+  let first = true;
+  globalThis.fetch = async (url, options) => {
+    const body = options.body ? JSON.parse(options.body) : null;
+    requests.push({ url, body });
+    if (first && url === '/api/sync') {
+      first = false;
+      return Response.json({ reset: true, epoch: 77, rows: [], cursor: 0, more: false, accepted: 0 });
+    }
+    return Response.json({ rows: [], cursor: 0, epoch: 77, more: false });
+  };
+  try {
+    await S.load();
+    await S.addWords([S.makeWord({ lemma: 'Alt', zh: 'old' })]);
+    await S.saveWord(S.liveWords()[0]);
+    sync.token = 'erased-library-token';
+    sync.epoch = 5;
+    sync.cursor = 9;
+    await syncNow();
+    assert.equal(S.liveWords().length, 0, 'words of the erased library are still here');
+    assert.deepEqual([sync.epoch, sync.cursor], [77, 0]);
+    assert.equal(await idb.getKV('epoch', null), 77);
+    const syncs = requests.filter((r) => r.url === '/api/sync');
+    assert.equal(syncs[0].body.epoch, 5);
+    assert.ok(syncs.slice(1).every((r) => r.body.epoch === 77 && r.body.since === 0));
+    assert.ok(!syncs.slice(1).some((r) => r.body.changes.some((c) => c.kind === 'word')), 'old words were uploaded again');
+  } finally {
+    await setToken('');
+    globalThis.fetch = previousFetch;
+    if (previousNavigator) Object.defineProperty(globalThis, 'navigator', previousNavigator);
+    else delete globalThis.navigator;
+  }
+});
