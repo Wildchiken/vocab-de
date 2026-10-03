@@ -106,6 +106,14 @@ export async function setToken(token) {
   if (token) await syncNow();
 }
 
+/** Deletes this password's library on the server. Waits for a running sync so it can't refill it. */
+export async function wipeRemote() {
+  await running;
+  await api('/api/wipe', {});
+  sync.cursor = 0;
+  await idb.setKV('cursor', 0);
+}
+
 function collect() {
   const changes = [];
   if (state.settingsDirty) {

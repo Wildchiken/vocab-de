@@ -159,6 +159,19 @@ async function run(name, engine) {
     await third.waitForFunction(async () => (await import('/js/store.js')).liveWords().length > 20);
     assert.equal(await wordCount(third), await wordCount(page), "Alice's other device gets her words");
     await other.close();
+
+    // Erasing with sync on removes the cloud library too; otherwise the next sync would bring everything back
+    await page.evaluate(() => (location.hash = '#settings'));
+    await page.locator('#wipe').tap();
+    await page.locator('.dialog [data-ok="1"]').tap();
+    await page.waitForFunction(async () => (await import('/js/store.js')).liveWords().length === 0);
+    await page.waitForTimeout(500);
+    assert.equal(await wordCount(page), 0, 'erased words came back');
+    const fourth = await (await browser.newContext({ viewport: { width: 375, height: 812 }, hasTouch: true, locale: 'en-US' })).newPage();
+    await fourth.goto(base);
+    await connect(fourth, alice);
+    assert.equal(await wordCount(fourth), 0, 'the cloud library should be empty after erasing');
+    await fourth.context().close();
     await third.context().close();
 
     assert.deepEqual(problems, [], 'errors in the page');

@@ -146,3 +146,20 @@ test('oversized records are skipped and a library has a size limit', async () =>
   assert.equal(res.accepted, 1);
   assert.deepEqual((await pull(call)).map((r) => r.id), ['ok']);
 });
+
+test('wiping deletes only the caller\'s library', async () => {
+  const env = { SYNC_TOKEN: 'one-secret', SYNC_TOKENS: 'two-secret', DB: openD1(':memory:') };
+  const one = as(env, 'one-secret');
+  const two = as(env, 'two-secret');
+  await one('/api/sync', { since: 0, changes: [word('a', 'A'), word('b', 'B')] });
+  await two('/api/sync', { since: 0, changes: [word('a', 'other')] });
+  assert.equal((await one('/api/wipe', {})).status, 200);
+  assert.deepEqual(await pull(one), []);
+  assert.deepEqual((await pull(two)).map((r) => r.data.zh), ['other']);
+  // not without a valid password
+  assert.equal((await as(env, 'nope-nope')('/api/wipe', {})).status, 401);
+  assert.deepEqual((await pull(two)).length, 1);
+  // a fresh library starts counting again from the beginning
+  const res = await (await one('/api/sync', { since: 0, changes: [word('c', 'C')] })).json();
+  assert.equal(res.rows.length, 1);
+});

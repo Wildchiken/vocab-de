@@ -1,6 +1,6 @@
 import * as S from './store.js';
 import { state } from './store.js';
-import { sync, initSync, setToken, syncNow, onSyncChange, onRemoteChange } from './sync.js';
+import { sync, initSync, setToken, syncNow, wipeRemote, onSyncChange, onRemoteChange } from './sync.js';
 import {
   parseLine,
   isIncomplete,
@@ -2289,7 +2289,7 @@ function settingsView() {
       <div class="section-footer">${t('set.backupFoot', { time: relTime(state.lastBackup) })}</div>
     </section>
     <section class="section">
-      <div class="list"><button class="row destructive center" id="wipe">${t('set.wipe')}</button></div>
+      <div class="list"><button class="row destructive center" id="wipe">${t(sync.token ? 'set.wipeAll' : 'set.wipe')}</button></div>
       <div class="section-footer center">${t('set.shortcuts')}</div>
     </section>`;
 
@@ -2424,8 +2424,18 @@ function settingsView() {
     }
   });
   $('#wipe').addEventListener('click', async () => {
+    // With sync on, wiping only this device would be undone at once by the next sync, so the
+    // library on the server goes too. That comes first: if the server can't be reached,
+    // nothing is deleted.
     const message = sync.token ? t('set.wipeSynced') : t('set.wipeLocal');
     if (!(await dialog({ message, confirm: t('dlg.erase'), destructive: true }))) return;
+    if (sync.token) {
+      try {
+        await wipeRemote();
+      } catch {
+        return toast(t('set.wipeFailed'), 4000);
+      }
+    }
     await S.wipeLocal();
     location.reload();
   });

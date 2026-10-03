@@ -20,6 +20,11 @@ export default {
       if (url.pathname === '/api/sync' && request.method === 'POST') {
         return json(await sync(env, owner, await readJson(request)));
       }
+      // Deletes this password's whole library, e.g. when someone erases everything.
+      if (url.pathname === '/api/wipe' && request.method === 'POST') {
+        await env.DB.prepare('DELETE FROM library WHERE owner = ?1').bind(owner).run();
+        return json({ ok: true });
+      }
       return json({ error: 'not found' }, 404);
     } catch (err) {
       if (err instanceof HttpError) return json({ error: err.message }, err.status);
@@ -110,8 +115,9 @@ async function ensureSchema(env) {
     ),
     env.DB.prepare('CREATE INDEX IF NOT EXISTS idx_library_seq ON library (owner, seq)'),
   ]);
-  // Earlier versions had one shared table; its rows now belong to the SYNC_TOKEN library. The
-  // old table is kept under another name in case a rollback is needed.
+  // Earlier versions had a single table with no owner. Its rows become the library of the
+  // SYNC_TOKEN password and nobody else's. The old table is kept under another name in case a
+  // rollback is needed.
   const legacyTable = async () =>
     (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'records'").all()).results.length > 0;
   if (env.SYNC_TOKEN && (await legacyTable())) {
