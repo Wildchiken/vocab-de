@@ -42,8 +42,10 @@ export async function initSync() {
 
 let timer = null;
 let failures = 0;
+let changingToken = false;
 function schedule(ms) {
   clearTimeout(timer);
+  if (changingToken) return;
   timer = setTimeout(syncNow, ms);
 }
 
@@ -75,20 +77,32 @@ async function api(path, body, token = sync.token) {
 }
 
 export async function setToken(token) {
+  if (changingToken) throw Object.assign(new Error('library switch in progress'), { code: 'server' });
   token = token.trim();
-  if (token) {
-    await api('/api/ping', null, token);
+  changingToken = true;
+  clearTimeout(timer);
+  try {
+    // Finish the old library's requests before changing its token or cursor. A slow
+    // background pull must never complete inside the newly selected library.
+    if (running) await running;
+    if (token) {
+      await api('/api/ping', null, token);
+    }
+    // A different password may mean a different server: pull from the start and push
+    // everything, otherwise records synced to the old server would never reach the new one.
+    if (token && token !== sync.token) {
+      sync.cursor = 0;
+      await idb.setKV('cursor', 0);
+      await markAllDirty();
+    }
+    sync.token = token;
+    await idb.setKV('token', token);
+    setStatus(token ? 'idle' : 'off');
+  } finally {
+    changingToken = false;
+    clearTimeout(timer);
+    if (sync.token) schedule(500);
   }
-  // A different password may mean a different server: pull from the start and push
-  // everything, otherwise records synced to the old server would never reach the new one.
-  if (token && token !== sync.token) {
-    sync.cursor = 0;
-    await idb.setKV('cursor', 0);
-    await markAllDirty();
-  }
-  sync.token = token;
-  await idb.setKV('token', token);
-  setStatus(token ? 'idle' : 'off');
   if (token) await syncNow();
 }
 
@@ -168,6 +182,7 @@ async function applyRows(rows) {
 
 let running = null;
 export function syncNow() {
+  if (changingToken) return running || Promise.resolve();
   if (!sync.token) return Promise.resolve();
   if (running) return running;
   running = (async () => {
