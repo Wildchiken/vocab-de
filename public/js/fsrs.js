@@ -44,6 +44,7 @@ function intervalFor(s, r) {
   return (s / FACTOR) * (Math.pow(r, 1 / DECAY) - 1);
 }
 
+const round4 = (x) => Math.round(x * 1e4) / 1e4;
 const clampD = (d) => Math.min(10, Math.max(1, d));
 const initS = (w, g) => Math.max(0.1, w[g - 1]);
 const initD = (w, g) => clampD(w[4] - (g - 3) * w[5]);
@@ -68,7 +69,7 @@ const withDefaults = (p) => ({ ...DEFAULT_PARAMS, ...p });
 export function schedule(card, g, now, params, rand = Math.random) {
   const p = withDefaults(params);
   const w = p.w;
-  const c = { ...card, reps: (card.reps || 0) + 1, lastRating: g, last: now };
+  const c = { ...card, reps: (card.reps || 0) + 1, last: now };
   delete c.step;
   delete c.recheck;
   if (!card.state || card.state === 'new') {
@@ -88,6 +89,9 @@ export function schedule(card, g, now, params, rand = Math.random) {
     } else c.s = recallS(w, d, s, r, g);
   }
   c.state = 'review';
+  // four decimals are plenty and keep every stored and synced record shorter
+  c.s = round4(c.s);
+  c.d = round4(c.d);
   let ivl = nextIvl(c.s, p);
   if (ivl >= 3) ivl = Math.min(p.maxIvl, Math.max(2, Math.round(ivl * (0.95 + rand() * 0.1))));
   c.ivl = ivl;

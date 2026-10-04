@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Individual review entries are kept for 90 days; older ones become one summary per day, so storage and first sync on a new device no longer grow with the years. The streak and totals are kept. On the server entries are kept for 120 days.
+- Settings → Storage and sync: what is stored here and in the cloud, whether the browser keeps the data, and a Tidy up now button.
+- The Node server compresses text files and answers repeat requests with 304.
+- A page left open polls less often while nothing changes.
+- Records are a little smaller: rounded card numbers, no empty card for words not studied yet.
+
 ## 1.1.0
 
 Study

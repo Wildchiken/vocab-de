@@ -48,3 +48,38 @@ test('sends a strict content security policy with the pages and the API', async 
     assert.equal(res.headers.get('x-content-type-options'), 'nosniff', path);
   }
 });
+
+test('compresses text files and answers a repeat request with 304', async () => {
+  const plain = await fetch(`${base}/js/app.js`, { headers: { 'accept-encoding': 'identity' } });
+  const text = await plain.text();
+  assert.equal(plain.headers.get('content-encoding'), null);
+  const etag = plain.headers.get('etag');
+  assert.match(etag, /^"[\w-]+"$/);
+
+  for (const encoding of ['br', 'gzip']) {
+    const res = await fetch(`${base}/js/app.js`, { headers: { 'accept-encoding': encoding } });
+    assert.equal(res.headers.get('content-encoding'), encoding);
+    assert.equal(res.headers.get('etag'), etag);
+    assert.equal(await res.text(), text, `${encoding} body differs`);
+    assert.ok(Number(res.headers.get('content-length')) < text.length / 2, `${encoding} did not make it smaller`);
+  }
+
+  const again = await fetch(`${base}/js/app.js`, { headers: { 'if-none-match': etag } });
+  assert.equal(again.status, 304);
+  assert.equal(await again.text(), '');
+  // a different file has a different tag
+  assert.notEqual((await fetch(`${base}/app.css`)).headers.get('etag'), etag);
+  // images are sent as they are
+  assert.equal((await fetch(`${base}/icons/icon-180.png`, { headers: { 'accept-encoding': 'gzip' } })).headers.get('content-encoding'), null);
+});
+
+test('compresses large API responses', async () => {
+  const words = Array.from({ length: 80 }, (_, i) => ({ kind: 'word', id: `w${i}`, updated_at: 1, data: { id: `w${i}`, zh: 'ein längeres Beispiel '.repeat(5) } }));
+  const res = await fetch(`${base}/api/sync`, {
+    method: 'POST',
+    headers: { authorization: 'Bearer secret', 'content-type': 'application/json', 'accept-encoding': 'gzip' },
+    body: JSON.stringify({ since: 0, changes: words }),
+  });
+  assert.equal(res.headers.get('content-encoding'), 'gzip');
+  assert.ok((await res.json()).rows.length >= 80);
+});

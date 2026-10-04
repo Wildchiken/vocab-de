@@ -127,6 +127,22 @@ async function run(name, engine) {
     await page.evaluate(() => (location.hash = '#stats'));
     await page.locator('.list-progress').first().waitFor();
 
+    // Review entries older than 90 days become one summary per day, and the totals stay
+    await page.evaluate(async () => {
+      const S = await import('/js/store.js');
+      const { idb } = await import('/js/db.js');
+      const old = Array.from({ length: 5 }, (_, i) => ({ id: `old${i}`, w: 'x', t: 'meaning', g: i ? 3 : 1, ts: Date.now() - 200 * 864e5 + i * 1000, ms: 1000, st: 'review', synced: true }));
+      await idb.putMany('logs', old);
+      S.state.logs = [...old, ...S.state.logs].sort((a, b) => a.ts - b.ts);
+    });
+    const answersBefore = await page.evaluate(async () => (await import('/js/store.js')).storageInfo().answers);
+    await page.evaluate(() => (location.hash = '#settings'));
+    await page.locator('#compactNow').tap();
+    await page.waitForFunction(async () => (await import('/js/store.js')).state.days.size === 1);
+    const kept = await page.evaluate(async () => (await import('/js/store.js')).storageInfo());
+    assert.deepEqual([kept.answers, kept.days], [answersBefore, 1], 'tidying up lost answers');
+    assert.ok(!(await page.evaluate(async () => (await import('/js/store.js')).state.logs.some((l) => l.id.startsWith('old')))));
+
     // Sync: every password is its own library, so two people never see each other's words
     const wordCount = (p) => p.evaluate(async () => (await import('/js/store.js')).liveWords().length);
     const connect = async (p, token) => {
@@ -157,6 +173,7 @@ async function run(name, engine) {
     await third.goto(base);
     await connect(third, alice);
     await third.waitForFunction(async () => (await import('/js/store.js')).liveWords().length > 20);
+    assert.equal(await third.evaluate(async () => (await import('/js/store.js')).state.days.size), 1, 'day summaries should sync');
     assert.equal(await wordCount(third), await wordCount(page), "Alice's other device gets her words");
     await other.close();
 

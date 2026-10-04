@@ -56,6 +56,7 @@ export const idb = {
   put: (store, value) => tx(store, 'readwrite', (s) => s.put(value)),
   putMany: (store, values) => tx(store, 'readwrite', (s) => values.forEach((v) => s.put(v))),
   del: (store, key) => tx(store, 'readwrite', (s) => s.delete(key)),
+  delMany: (store, keys) => tx(store, 'readwrite', (s) => keys.forEach((k) => s.delete(k))),
   clear: (store) => tx(store, 'readwrite', (s) => s.clear()),
   async getKV(key, fallback) {
     const row = await this.get('kv', key);

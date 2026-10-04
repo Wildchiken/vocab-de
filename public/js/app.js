@@ -2221,8 +2221,11 @@ function newToken() {
   return out;
 }
 
+const fmtBytes = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
+
 function settingsView() {
   setNav({ title: t('tab.settings') });
+  const info = S.storageInfo();
   const s = state.settings;
   const langPref = local.get('lang', 'auto');
   const syncOn = Boolean(sync.token) || local.get('syncOn', false);
@@ -2289,6 +2292,20 @@ function settingsView() {
     ${standalone ? '' : installSectionHTML()}
 
     <section class="section">
+      <div class="section-header">${t('storage.title')}</div>
+      <div class="list">
+        ${row({ title: t('storage.words'), detail: t('storage.wordsValue', { n: info.words, d: info.deleted }) })}
+        ${row({ title: t('storage.logs'), detail: t('storage.logsValue', { n: info.logs, days: info.days }) })}
+        ${row({ title: t('storage.answers'), detail: info.answers })}
+        ${row({ title: t('storage.usage'), detail: '<span id="stUsage">…</span>' })}
+        ${row({ title: t('storage.persist'), detail: '<span id="stPersist">…</span>' })}
+        ${sync.token ? row({ title: t('storage.cloud'), detail: '<span id="stCloud">…</span>' }) : ''}
+        <button class="row action" id="compactNow">${t('storage.compact')}</button>
+      </div>
+      <div class="section-footer" id="stFoot">${t('storage.foot', { keep: S.LOG_DAYS })}</div>
+    </section>
+
+    <section class="section">
       <div class="section-header">${t('set.wordList')}</div>
       <div class="list">
         <label class="row action has-icon">${icon('down', 'green')}<div class="row-main strong">${t('set.importList')}</div><input type="file" id="importList" accept=".txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values" hidden></label>
@@ -2313,6 +2330,31 @@ function settingsView() {
 
   const showEstimate = () => ($('#estimate').textContent = t('set.estimate', { n: S.estimateMinutes() }));
   showEstimate();
+  // Numbers the browser and the server have to tell us arrive a moment later.
+  (async () => {
+    const usage = await navigator.storage?.estimate?.().catch(() => null);
+    if (usage) $('#stUsage') && ($('#stUsage').textContent = t('storage.usageValue', { used: fmtBytes(usage.usage || 0), quota: fmtBytes(usage.quota || 0) }));
+    else $('#stUsage') && ($('#stUsage').textContent = '—');
+    const kept = await navigator.storage?.persisted?.().catch(() => false);
+    if ($('#stPersist')) $('#stPersist').textContent = t(kept ? 'storage.persisted' : 'storage.notPersisted');
+    // Without sync, data that the browser may clear is the one thing worth a warning.
+    if (!kept && !sync.token && $('#stFoot')) $('#stFoot').textContent += ` ${t('storage.warn')}`;
+    if (sync.token && $('#stCloud')) {
+      try {
+        $('#stCloud').textContent = t('storage.cloudValue', { n: (await peek(sync.token)).words ?? '?', time: relTime(sync.lastSync) });
+      } catch {
+        $('#stCloud').textContent = '—';
+      }
+    }
+  })();
+  $('#compactNow').addEventListener('click', async () => {
+    await syncNow();
+    const folded = await S.compactLogs();
+    await syncNow();
+    toast(t(folded ? 'storage.compacted' : 'storage.nothing', { n: folded }), 3500);
+    route();
+  });
+
   let saveTimer;
   $$('.stepper').forEach((st) =>
     st.addEventListener('click', (e) => {
@@ -2483,6 +2525,8 @@ async function boot() {
     clearTimeout(slow);
   }
   await initSync();
+  // Without sync nothing else would fold old logs into day summaries; with sync it happens after a sync.
+  if (!sync.token) await S.compactLogs();
   onSyncChange(renderSync);
   // Data pulled from another device: refresh in place where the view supports it, and
   // never re-render under someone who is typing.

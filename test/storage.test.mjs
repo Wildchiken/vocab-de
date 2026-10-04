@@ -22,7 +22,7 @@ test('answer records a log and undo restores the card', async () => {
   assert.equal(S.state.words.get(w.id).cards.meaning.state, 'review');
   assert.equal(S.state.logs.length, before + 1);
   await S.undo(snap);
-  assert.equal(S.state.words.get(w.id).cards.meaning.state, 'new');
+  assert.equal(S.getCard(S.state.words.get(w.id), 'meaning').state, 'new');
   assert.equal(S.state.logs.length, before);
   assert.equal((await idb.all('logs')).length, before);
 });
@@ -87,3 +87,46 @@ test('article recall counts picks from the log field and from older article card
   // pick entries were never answers of their own
   assert.equal(st.todayReviews, 4);
 });
+
+// --- old logs become day summaries ---
+
+const DAY = 86_400_000;
+const now = Date.now();
+const logAt = (id, ageDays, g = 3, ms = 1000) => ({ id, w: 'w', t: 'meaning', g, ts: now - ageDays * DAY, ms, st: 'review', synced: true });
+const { dayStart } = await import('../public/js/fsrs.js');
+const { compactLogs, acceptDay, dayKey, exportData, importData } = S;
+
+test('logs older than 90 days are folded into one summary per day', async () => {
+  S.state.logs = [logAt('a', 200), logAt('b', 200, 1, 2000), logAt('c', 150), logAt('new', 3)].sort((x, y) => x.ts - y.ts);
+  S.state.days = new Map();
+  assert.equal(await compactLogs(now), 3);
+  assert.deepEqual(S.state.logs.map((l) => l.id), ['new']);
+  const d200 = S.state.days.get(dayKey(now - 200 * DAY));
+  assert.deepEqual([d200.n, d200.again, d200.ms, d200.dirty], [2, 1, 3000, true]);
+  assert.equal(S.state.days.size, 2);
+  // nothing left to fold
+  assert.equal(await compactLogs(now), 0);
+});
+
+test('a day that already has a summary is not counted twice', async () => {
+  S.state.days = new Map();
+  assert.ok(acceptDay({ id: dayKey(now - 120 * DAY), day: dayStart(now - 120 * DAY), n: 50, again: 5, ms: 1, updatedAt: 9 }));
+  S.state.logs = [logAt('x', 120), logAt('y', 120)].sort((a, b) => a.ts - b.ts);
+  await compactLogs(now);
+  assert.equal(S.state.days.get(dayKey(now - 120 * DAY)).n, 50);
+  assert.equal(S.state.logs.length, 0);
+  // an older copy of the same summary does not replace a newer one
+  assert.equal(acceptDay({ id: dayKey(now - 120 * DAY), day: 1, n: 1, updatedAt: 1 }), false);
+});
+
+test('backups carry the day summaries', async () => {
+  S.state.days = new Map();
+  acceptDay({ id: '2025-12-01', day: 1, n: 7, again: 1, ms: 5, updatedAt: 3 });
+  const data = exportData();
+  assert.deepEqual(data.days, [{ id: '2025-12-01', day: 1, n: 7, again: 1, ms: 5, updatedAt: 3 }]);
+  S.state.days = new Map();
+  await importData(data);
+  assert.equal(S.state.days.get('2025-12-01').n, 7);
+  assert.equal(S.state.days.get('2025-12-01').dirty, true);
+});
+

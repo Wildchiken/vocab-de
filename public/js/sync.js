@@ -1,5 +1,5 @@
 import { idb } from './db.js';
-import { state, markSettingsClean, markAllDirty, onChange, reconcile, resetLocalLibrary } from './store.js';
+import { state, markSettingsClean, markAllDirty, onChange, reconcile, resetLocalLibrary, compactLogs, acceptDay, saveDays, logCutoff } from './store.js';
 
 const BATCH = 400;
 
@@ -29,6 +29,7 @@ export async function initSync() {
 
   onChange(() => {
     if (!sync.token) return;
+    idlePolls = 0;
     if (sync.status === 'idle') setStatus('pending');
     schedule(4000);
   });
@@ -38,8 +39,22 @@ export async function initSync() {
     if (document.visibilityState === 'visible') schedule(300);
     else if (hasPending()) syncNow();
   });
-  setInterval(() => document.visibilityState === 'visible' && schedule(0), 5 * 60_000);
+  polling = true;
+  armPoll();
   if (sync.token) schedule(0);
+}
+
+// A page left open polls the server now and then. While nothing happens the gaps grow: 5, 10, 20,
+// at most 30 minutes; any change on either side starts over at 5. Coming back to the page
+// always syncs at once, so a longer gap only matters for pages nobody is looking at.
+export const nextPollMinutes = (idle) => Math.min(30, 5 * 2 ** idle);
+let idlePolls = 0;
+let polling = false;
+let pollTimer = null;
+function armPoll() {
+  if (!polling) return;
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(() => (document.visibilityState === 'visible' ? schedule(0) : armPoll()), nextPollMinutes(idlePolls) * 60_000);
 }
 
 let timer = null;
@@ -54,6 +69,7 @@ function schedule(ms) {
 function hasPending() {
   if (state.settingsDirty) return true;
   for (const w of state.words.values()) if (w.dirty) return true;
+  for (const d of state.days.values()) if (d.dirty) return true;
   return state.logs.some((l) => !l.synced);
 }
 
@@ -138,6 +154,11 @@ function collect() {
     const { dirty, ...data } = w;
     changes.push({ kind: 'word', id: w.id, updated_at: w.updatedAt, deleted: w.deleted, data });
   }
+  for (const d of state.days.values()) {
+    if (!d.dirty) continue;
+    const { dirty, ...data } = d;
+    changes.push({ kind: 'day', id: d.id, updated_at: d.updatedAt, data });
+  }
   for (const l of state.logs) {
     if (l.synced) continue;
     const { synced, ...data } = l;
@@ -149,6 +170,7 @@ function collect() {
 async function markSent(batch) {
   const words = [];
   const logs = [];
+  let days = false;
   const byId = new Map(state.logs.map((l) => [l.id, l]));
   for (const c of batch) {
     if (c.kind === 'word') {
@@ -163,19 +185,28 @@ async function markSent(batch) {
         l.synced = true;
         logs.push(l);
       }
+    } else if (c.kind === 'day') {
+      const d = state.days.get(c.id);
+      if (d && d.updatedAt === c.updated_at && d.dirty) {
+        d.dirty = false;
+        days = true;
+      }
     } else if (c.kind === 'settings') {
       await markSettingsClean(c.updated_at);
     }
   }
   if (words.length) await idb.putMany('words', words);
   if (logs.length) await idb.putMany('logs', logs);
+  if (days) await saveDays();
 }
 
 async function applyRows(rows) {
   const words = [];
   const logs = [];
   const knownLogs = new Set(state.logs.map((l) => l.id));
+  const cutoff = logCutoff(Date.now());
   let changed = false;
+  let days = false;
   for (const r of rows) {
     if (r.kind === 'word' && r.data) {
       const w = reconcile(state.words.get(r.id), { ...r.data, updatedAt: r.updated_at, deleted: r.deleted });
@@ -183,7 +214,10 @@ async function applyRows(rows) {
         state.words.set(w.id, w);
         words.push(w);
       }
-    } else if (r.kind === 'log' && r.data && !knownLogs.has(r.id)) {
+    } else if (r.kind === 'day' && r.data) {
+      if (acceptDay({ ...r.data, updatedAt: r.updated_at })) days = changed = true;
+      // logs older than this are only kept as day summaries; see compactLogs
+    } else if (r.kind === 'log' && r.data && r.data.ts >= cutoff && !knownLogs.has(r.id)) {
       const l = { ...r.data, synced: true };
       logs.push(l);
       knownLogs.add(r.id);
@@ -195,6 +229,7 @@ async function applyRows(rows) {
     }
   }
   if (words.length) await idb.putMany('words', words);
+  if (days) await saveDays();
   if (logs.length) {
     await idb.putMany('logs', logs);
     state.logs = [...state.logs, ...logs].sort((a, b) => a.ts - b.ts);
@@ -216,7 +251,9 @@ export function syncNow() {
     try {
       let changed = false;
       let wasReset = false;
+      let sent = 0;
       const round = async (batch) => {
+        sent += batch.length;
         const res = await api('/api/sync', { since: sync.cursor, epoch: sync.epoch, changes: batch });
         if (res.reset) {
           // The library was erased from another device: what is here belongs to the old one.
@@ -256,14 +293,19 @@ export function syncNow() {
       await idb.setKV('lastSync', sync.lastSync);
       failures = 0;
       setStatus(hasPending() ? 'pending' : 'idle');
+      idlePolls = changed || sent ? 0 : idlePolls + 1;
       if (changed) emitRemote();
       if (wasReset) resetListeners.forEach((fn) => fn());
+      // Everything is in sync, so old logs can safely become day summaries; the summaries are
+      // uploaded by the sync this schedules.
+      if (!hasPending()) await compactLogs();
     } catch (err) {
       setStatus(navigator.onLine ? 'error' : 'offline', err.code || 'server');
       // A wrong password won't fix itself; anything else is retried with backoff.
       if (err.code !== 'token') schedule(Math.min(10 * 60_000, 15_000 * 2 ** failures++));
     } finally {
       running = null;
+      armPoll();
     }
   })();
   return running;

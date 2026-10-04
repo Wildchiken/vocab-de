@@ -88,6 +88,10 @@ const MAX_RECORDS = 200_000;
 // The size of a library is only counted when its write counter passes a multiple of this,
 // which keeps counting (D1 bills the rows it reads) off the everyday sync.
 const COUNT_EVERY = 1000;
+// Per-answer review logs older than this are not kept on the server. Devices fold logs older
+// than 90 days into one summary row per day first; the extra 30 days leave them time to do it
+// and upload the summaries before the originals go.
+const LOG_KEEP_MS = 120 * 86_400_000;
 
 const tokenList = (env) => [...new Set([env.SYNC_TOKEN, ...String(env.SYNC_TOKENS || '').split(/[\s,]+/)].filter(Boolean))];
 const isOpen = (env) => /^(1|true|yes|on)$/i.test(String(env.SYNC_OPEN || ''));
@@ -177,6 +181,11 @@ async function sync(env, owner, body) {
     const { results } = await env.DB.prepare('SELECT COALESCE(MAX(seq), 0) AS top FROM library WHERE owner = ?1').bind(owner).all();
     const top = results[0].top;
     if (Math.floor((top + changes.length) / COUNT_EVERY) > Math.floor(top / COUNT_EVERY)) {
+      // Expired logs go first, so they never count against the limit. Doing this only when the
+      // write counter passes a thousand keeps it off the everyday sync.
+      await env.DB.prepare("DELETE FROM library WHERE owner = ?1 AND kind = 'log' AND updated_at < ?2")
+        .bind(owner, Date.now() - LOG_KEEP_MS)
+        .run();
       const { results: count } = await env.DB.prepare('SELECT COUNT(*) AS n FROM library WHERE owner = ?1').bind(owner).all();
       if (count[0].n + changes.length > (Number(env.SYNC_MAX_RECORDS) || MAX_RECORDS)) throw new HttpError(413, 'library is full');
     }
@@ -192,7 +201,8 @@ async function sync(env, owner, body) {
   );
   const stmts = [];
   for (const c of changes) {
-    if (!['word', 'log', 'settings'].includes(c.kind) || typeof c.id !== 'string' || c.id.length > 200) continue;
+    if (!['word', 'log', 'day', 'settings'].includes(c.kind) || typeof c.id !== 'string' || c.id.length > 200) continue;
+    if (c.kind === 'log' && (Number(c.updated_at) || 0) < Date.now() - LOG_KEEP_MS) continue;
     const data = JSON.stringify(c.data ?? null);
     if (data.length > MAX_RECORD_BYTES) continue;
     stmts.push(upsert.bind(owner, c.kind, c.id, Number(c.updated_at) || 0, c.deleted ? 1 : 0, data));

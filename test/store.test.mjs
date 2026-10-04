@@ -1,7 +1,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { state, makeWord, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, tagProgress, DEFAULT_SETTINGS } from '../public/js/store.js';
-import { MIN, DAY, dayStart } from '../public/js/fsrs.js';
+import { state, getCard, acceptDay, dayKey, stats, makeWord, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, tagProgress, DEFAULT_SETTINGS } from '../public/js/store.js';
+import { MIN, DAY, dayStart, newCard } from '../public/js/fsrs.js';
 
 const now = new Date('2026-09-27T10:00:00').getTime();
 
@@ -150,7 +150,7 @@ test('a reset wins over older reviews from another device', () => {
   reset.resetAt = 600;
   reset.updatedAt = 600;
   const merged = mergeWord(reviewed, reset);
-  assert.equal(merged.cards.meaning.state, 'new');
+  assert.equal(getCard(merged, 'meaning').state, 'new');
   assert.equal(merged.cards.article, undefined);
 });
 
@@ -223,4 +223,32 @@ test('word list progress follows the queue of new words', () => {
   // everything seen: no date
   for (const w of list) w.cards.meaning = { state: 'review', due: now + DAY, s: 1, d: 5, reps: 1, lapses: 0, last: now, firstAt: now };
   assert.equal(tagProgress(now).find((r) => r.tag === 'New').days, null);
+});
+
+// --- old logs become day summaries ---
+
+const logAt = (id, ageDays, g = 3, ms = 1000) => ({ id, w: 'w', t: 'meaning', g, ts: now - ageDays * DAY, ms, st: 'review', synced: true });
+
+test('the streak counts summarized days and statistics ignore logs past the cutoff', () => {
+  state.days = new Map();
+  state.logs = [];
+  // studied every day from 120 days ago to 100 days ago and yesterday and today
+  for (let age = 100; age <= 120; age++) acceptDay({ id: dayKey(now - age * DAY), day: dayStart(now - age * DAY), n: 10, again: 0, ms: 1, updatedAt: 1 });
+  state.logs = [logAt('t', 0), logAt('y', 1)];
+  const st = stats(now);
+  assert.equal(st.streak, 2);
+  // a leftover log that is still waiting to be folded is not counted twice
+  state.logs.push(logAt('old', 110));
+  state.logs.sort((a, b) => a.ts - b.ts);
+  assert.equal(stats(now).todayReviews, 1);
+  // with the gap closed the earlier days join the streak
+  for (let age = 2; age < 100; age++) acceptDay({ id: dayKey(now - age * DAY), day: dayStart(now - age * DAY), n: 1, again: 0, ms: 1, updatedAt: 1 });
+  assert.equal(stats(now).streak, 121);
+});
+
+test('stored card numbers are short and an unseen word has no card yet', async () => {
+  const w = makeWord({ lemma: 'Tisch', pos: 'noun', article: 'der', zh: 'table' });
+  assert.deepEqual(w.cards, {});
+  const card = (await import('../public/js/fsrs.js')).schedule(newCard(), 3, now, {}, () => 0.5);
+  for (const v of [card.s, card.d]) assert.ok(String(v).replace(/^\d+\./, '').length <= 4, `${v}`);
 });

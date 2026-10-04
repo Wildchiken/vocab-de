@@ -65,6 +65,8 @@ npm start
 | `HOST` | `0.0.0.0` | Bind address; use `127.0.0.1` behind a local reverse proxy |
 | `DB_PATH` | `vocab-de.sqlite` | SQLite database path, relative to the working directory |
 
+The server compresses text files (brotli or gzip) and answers repeat requests with an ETag, so the first load drops from about 255 KB to about 80 KB (on Cloudflare, Cloudflare does this).
+
 Use HTTPS for Service Workers and secure-context features such as clipboard access; localhost also works for development. When other devices connect over the network, put the server behind a reverse proxy with a certificate, for example [Caddy](https://caddyserver.com): `caddy reverse-proxy --from vocab.example.com --to localhost:8787`.
 
 ### Cloudflare Workers
@@ -135,11 +137,13 @@ File import (Import from file on the Add screen, or Settings → Word list → I
 
 ## How sync works
 
-Clients first pull changes by a server sequence number, then upload their own; sequence numbers and records are separate for each password. When a word was changed on two devices, the client merges the copies: text such as the meaning comes from the later edit, and each card from the later review, so an offline review on one device can't undo an edit made on another. The merge is uploaded again, so all devices converge. The server itself keeps the record with the newer update time. Device clocks that are far off can affect the result. Review logs sync by their own IDs. When a library is erased, the server gives it a new generation; a device that still carries the old one finds out on its next sync and clears its own words instead of uploading the old data again. The Cloudflare Worker and the Node server serve the same API.
+Clients first pull changes by a server sequence number, then upload their own; sequence numbers and records are separate for each password. When a word was changed on two devices, the client merges the copies: text such as the meaning comes from the later edit, and each card from the later review, so an offline review on one device can't undo an edit made on another. The merge is uploaded again, so all devices converge. The server itself keeps the record with the newer update time. Device clocks that are far off can affect the result. Review logs sync by their own IDs, older ones as day summaries by date. A page left open polls every 5 minutes, slowing down to every 30 minutes while nothing changes; coming back to the page, or any change, syncs at once. When a library is erased, the server gives it a new generation; a device that still carries the old one finds out on its next sync and clears its own words instead of uploading the old data again. The Cloudflare Worker and the Node server serve the same API.
 
 ## Data and backup
 
 Words, review history and settings are stored locally. JSON export includes words, review history and settings. Import merges words and review history, and restores the settings when the backup's are newer. With sync off, the home screen reminds you once two weeks pass without a backup. CSV export is a word list without review history, and can be imported again. Clearing site data or browser storage eviction can remove local data. Export a backup before changing domains or browser profiles.
+
+Individual review entries are kept for the last 90 days; older ones are summarized into one row per day (answers, not known, time) once a sync has finished, and the streak and the total are unaffected. On the server individual entries are kept for 120 days, which leaves devices 30 days to produce the summaries before the originals go. A user who answers 250 cards a day then stays at about 8 MB in the cloud instead of growing by 35 MB a year. Settings → Storage and sync shows what is stored on the device, the number of words in the cloud and whether the browser has agreed to keep the data, and has a Tidy up now button.
 
 Erase in Settings clears only this device when sync is off. With sync on, clearing only the device would be undone by the next sync, so it erases the cloud library of that password as well (the server goes first; if it can't be reached, nothing is touched). Other devices clear their own words and progress the next time they sync, and this device stays connected and starts over on the empty library. To erase just one device, turn sync off first.
 

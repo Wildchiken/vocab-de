@@ -207,3 +207,23 @@ test('a library that is full refuses more records, checked every 1000 writes', a
   assert.equal(res.status, 413);
   assert.equal((await pull(call)).length, 500);
 });
+
+test('day summaries sync, and logs older than the server keeps are refused and cleaned up', async () => {
+  const env = { SYNC_TOKEN: 'days-token', SYNC_MAX_RECORDS: '100000', DB: openD1(':memory:') };
+  const call = as(env, 'days-token');
+  const DAY = 86_400_000;
+  const log = (id, ageDays) => ({ kind: 'log', id, updated_at: Date.now() - ageDays * DAY, data: { id } });
+  const day = { kind: 'day', id: '2026-01-05', updated_at: 5, data: { id: '2026-01-05', day: 1, n: 40, again: 6, ms: 90000 } };
+  // an old log is refused, a log inside the grace period (90-120 days) is still accepted
+  const res = await (await call('/api/sync', { since: 0, changes: [day, log('fresh', 1), log('grace', 100), log('expired', 130)] })).json();
+  assert.equal(res.accepted, 3);
+  assert.deepEqual((await pull(call)).map((r) => r.id).sort(), ['2026-01-05', 'fresh', 'grace']);
+
+  // a log that was accepted and later grows too old is deleted when the write counter passes a thousand
+  await call('/api/sync', { since: 0, changes: Array.from({ length: 500 }, (_, i) => ({ kind: 'word', id: 'w' + i, updated_at: 1, data: {} })) });
+  await env.DB.prepare("UPDATE library SET updated_at = ?1 WHERE id = 'grace'").bind(Date.now() - 130 * DAY).run();
+  await call('/api/sync', { since: 0, changes: Array.from({ length: 500 }, (_, i) => ({ kind: 'word', id: 'x' + i, updated_at: 1, data: {} })) });
+  const ids = (await pull(call)).map((r) => r.id);
+  assert.ok(!ids.includes('grace'), 'an expired log was kept');
+  assert.ok(ids.includes('fresh') && ids.includes('2026-01-05'));
+});

@@ -24,7 +24,19 @@ export const state = {
   settingsDirty: false,
   extraNew: { day: 0, n: 0, force: false }, // "study more" on top of today's limit, per device
   lastBackup: 0,
+  // Logs older than LOG_DAYS are folded into one summary per day:
+  // YYYY-MM-DD → { id, day (start of that day), n (answers), again (not known), ms, updatedAt, dirty }
+  days: new Map(),
 };
+
+export const LOG_DAYS = 90;
+export const logCutoff = (now) => dayStart(now) - LOG_DAYS * DAY;
+const pad = (n) => String(n).padStart(2, '0');
+export function dayKey(ts) {
+  const d = new Date(dayStart(ts));
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+export const saveDays = () => idb.setKV('days', Object.fromEntries(state.days));
 
 const listeners = new Set();
 export const onChange = (fn) => listeners.add(fn);
@@ -34,15 +46,17 @@ const uid = () =>
   crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
 
 export async function load() {
-  const [words, logs, settings, extraNew, lastBackup] = await Promise.all([
+  const [words, logs, settings, extraNew, lastBackup, days] = await Promise.all([
     idb.all('words'),
     idb.all('logs'),
     idb.getKV('settings', null),
     idb.getKV('extraNew', null),
     idb.getKV('lastBackup', 0),
+    idb.getKV('days', {}),
   ]);
   if (extraNew) state.extraNew = extraNew;
   state.lastBackup = lastBackup;
+  state.days = new Map(Object.entries(days));
   guessBatches(words);
   state.words = new Map(words.map((w) => [w.id, w]));
   state.logs = logs.sort((a, b) => a.ts - b.ts);
@@ -99,7 +113,7 @@ export function makeWord(f) {
     batch: f.batch || now,
     suspended: false,
     deleted: false,
-    cards: { meaning: newCard() },
+    cards: {}, // a card appears with its first answer
     dirty: true,
   };
 }
@@ -139,10 +153,12 @@ export async function markAllDirty() {
   const words = [...state.words.values()];
   for (const w of words) w.dirty = true;
   for (const l of state.logs) l.synced = false;
+  for (const d of state.days.values()) d.dirty = true;
   state.settingsDirty = true;
   await Promise.all([
     idb.putMany('words', words),
     idb.putMany('logs', state.logs),
+    saveDays(),
     idb.setKV('settings', { value: state.settings, dirty: true }),
   ]);
 }
@@ -160,7 +176,7 @@ export async function deleteWord(w) {
 }
 
 export async function resetProgress(w) {
-  w.cards = { meaning: newCard() };
+  w.cards = {};
   w.artMiss = 0;
   w.resetAt = Date.now();
   await saveWord(w);
@@ -424,10 +440,13 @@ export function stats(now = Date.now()) {
     ret[type][0]++;
     if (ok) ret[type][1]++;
   };
-  const days = new Set();
+  const days = new Set([...state.days.values()].map((d) => d.day));
+  const cutoff = logCutoff(now);
   let todayReviews = 0;
   let todayMs = 0;
   for (const l of state.logs) {
+    // older ones wait to be folded into a day summary, which is counted above
+    if (l.ts < cutoff) continue;
     days.add(dayStart(l.ts));
     if (l.ts >= since30) {
       // An article is picked on the meaning card (a); older versions had article cards and,
@@ -522,7 +541,6 @@ export function mergeWord(local, remote) {
     const c = !a ? b : !b ? a : (a.last || 0) > (b.last || 0) ? a : b;
     if (c && (c.state === 'new' || (c.last || 0) >= resetAt)) cards[t] = c;
   }
-  cards.meaning ??= newCard();
   const merged = { ...remote, cards, createdAt: Math.min(local.createdAt, remote.createdAt), editedAt: editTime(src) };
   for (const k of META) if (k in src) merged[k] = src[k];
   if (resetAt) merged.resetAt = resetAt;
@@ -562,6 +580,55 @@ export async function markBackedUp(now = Date.now()) {
   await idb.setKV('lastBackup', now);
 }
 
+/**
+ * Folds review logs older than LOG_DAYS into one summary per day, which is all the streak and
+ * the long-term totals need. A day somebody already summarized is left as it is, because
+ * counting it again would double it. Returns how many logs were folded.
+ */
+export async function compactLogs(now = Date.now()) {
+  const cutoff = logCutoff(now);
+  if (!state.logs.length || state.logs[0].ts >= cutoff) return 0;
+  const old = [];
+  const keep = [];
+  for (const l of state.logs) (l.ts < cutoff ? old : keep).push(l);
+  const folded = new Map();
+  for (const l of old) {
+    const key = dayKey(l.ts);
+    const d = folded.get(key) ?? { id: key, day: dayStart(l.ts), n: 0, again: 0, ms: 0, updatedAt: now, dirty: true };
+    d.n++;
+    if (l.g === 1) d.again++;
+    d.ms += l.ms || 0;
+    folded.set(key, d);
+  }
+  for (const [key, d] of folded) if (!state.days.has(key)) state.days.set(key, d);
+  state.logs = keep;
+  await Promise.all([saveDays(), idb.delMany('logs', old.map((l) => l.id))]);
+  emit();
+  return old.length;
+}
+
+/** A day summary from another device (or a backup): kept when it is new or newer. */
+export function acceptDay(d, dirty = false) {
+  if (typeof d?.id !== 'string' || !Number.isFinite(d.day) || !Number.isFinite(d.n)) return false;
+  const have = state.days.get(d.id);
+  if (have && (have.updatedAt || 0) >= (d.updatedAt || 0)) return false;
+  state.days.set(d.id, { id: d.id, day: d.day, n: d.n, again: d.again || 0, ms: d.ms || 0, updatedAt: d.updatedAt || 0, dirty });
+  return true;
+}
+
+/** What is stored on this device, for the storage panel. */
+export function storageInfo() {
+  const all = [...state.words.values()];
+  const summarized = [...state.days.values()];
+  return {
+    words: all.filter((w) => !w.deleted).length,
+    deleted: all.filter((w) => w.deleted).length,
+    logs: state.logs.length,
+    days: summarized.length,
+    answers: state.logs.length + summarized.reduce((n, d) => n + d.n, 0),
+  };
+}
+
 export function exportData() {
   return {
     app: 'vocab-de',
@@ -570,6 +637,7 @@ export function exportData() {
     settings: state.settings,
     words: [...state.words.values()].map(({ dirty, ...w }) => w),
     logs: state.logs.map(({ synced, ...l }) => l),
+    days: [...state.days.values()].map(({ dirty, ...d }) => d),
   };
 }
 
@@ -605,10 +673,14 @@ export async function importData(data) {
     .filter((l) => typeof l?.id === 'string' && Number.isFinite(l.ts) && !known.has(l.id))
     .map((l) => ({ ...l, synced: false }));
   await addWords(words);
+  let imported = false;
+  for (const d of Array.isArray(data.days) ? data.days : []) imported = acceptDay(d, true) || imported;
+  if (imported) await saveDays();
   if (logs.length) {
     await idb.putMany('logs', logs);
     state.logs = [...state.logs, ...logs].sort((a, b) => a.ts - b.ts);
   }
+  await compactLogs();
   emit();
   return { words: words.length, logs: logs.length, settings };
 }
@@ -628,9 +700,10 @@ export async function wipeLocal(keep = []) {
 // Empties the words and review history, here and in memory. Settings stay and are sent to
 // the library again.
 export async function resetLocalLibrary() {
-  await Promise.all([idb.clear('words'), idb.clear('logs')]);
+  await Promise.all([idb.clear('words'), idb.clear('logs'), idb.del('kv', 'days')]);
   state.words = new Map();
   state.logs = [];
+  state.days = new Map();
   state.settingsDirty = true;
   await idb.setKV('settings', { value: state.settings, dirty: true });
   emit();

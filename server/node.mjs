@@ -3,11 +3,12 @@
 // Environment: SYNC_TOKEN / SYNC_TOKENS (private list of sync tokens, one library each),
 // SYNC_OPEN=1 (any token of 16+ characters gets its own library), PORT (8787), HOST (0.0.0.0),
 // DB_PATH (vocab-de.sqlite)
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { brotliCompressSync, gzipSync } from 'node:zlib';
 import worker from '../src/worker.js';
 import { SECURITY_HEADERS } from '../src/headers.js';
 import { openD1 } from './d1-sqlite.mjs';
@@ -26,6 +27,14 @@ const TYPES = {
   '.png': 'image/png',
 };
 
+const COMPRESSIBLE = /^(text\/|application\/(json|manifest\+json|javascript)|image\/svg)/;
+const compressed = new Map(); // etag → { gzip, br }, so each version of a file is compressed once
+
+const acceptedEncoding = (req) => {
+  const accepted = String(req.headers['accept-encoding'] || '');
+  return /\bbr\b/.test(accepted) ? 'br' : /\bgzip\b/.test(accepted) ? 'gzip' : null;
+};
+
 async function serveStatic(req, res) {
   let path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
   if (path.endsWith('/')) path += 'index.html';
@@ -33,9 +42,25 @@ async function serveStatic(req, res) {
   if (!file.startsWith(ROOT)) return res.writeHead(403).end();
   try {
     const body = await readFile(file);
-    // The service worker does the offline caching; the browser should always revalidate.
-    res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' });
-    res.end(body);
+    const type = TYPES[extname(file)] || 'application/octet-stream';
+    // The service worker does the offline caching. Otherwise the browser revalidates every time,
+    // which costs a 304 with no body when nothing changed.
+    const etag = `"${createHash('sha1').update(body).digest('base64url').slice(0, 20)}"`;
+    const headers = { 'content-type': type, 'cache-control': 'no-cache', etag, vary: 'Accept-Encoding' };
+    const known = String(req.headers['if-none-match'] || '').split(',').map((v) => v.trim().replace(/^W\//, ''));
+    if (known.includes(etag)) return res.writeHead(304, headers).end();
+    const encoding = body.length > 1024 && COMPRESSIBLE.test(type) ? acceptedEncoding(req) : null;
+    let out = body;
+    if (encoding) {
+      const slot = compressed.get(etag) ?? {};
+      slot[encoding] ??= encoding === 'br' ? brotliCompressSync(body) : gzipSync(body);
+      compressed.set(etag, slot);
+      if (compressed.size > 200) compressed.delete(compressed.keys().next().value);
+      out = slot[encoding];
+      headers['content-encoding'] = encoding;
+    }
+    res.writeHead(200, { ...headers, 'content-length': out.length });
+    res.end(out);
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain' }).end('not found');
   }
@@ -57,8 +82,15 @@ async function serveApi(req, res, env) {
     body: req.method === 'GET' || req.method === 'HEAD' ? undefined : Buffer.concat(chunks),
   });
   const response = await worker.fetch(request, env);
-  res.writeHead(response.status, Object.fromEntries(response.headers));
-  res.end(Buffer.from(await response.arrayBuffer()));
+  let out = Buffer.from(await response.arrayBuffer());
+  const reply = { ...Object.fromEntries(response.headers), vary: 'Accept-Encoding' };
+  // gzip rather than brotli here: these responses are different every time
+  if (out.length > 1024 && /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+    out = gzipSync(out);
+    reply['content-encoding'] = 'gzip';
+  }
+  res.writeHead(response.status, { ...reply, 'content-length': out.length });
+  res.end(out);
 }
 
 export function createApp(env) {
