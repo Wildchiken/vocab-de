@@ -322,12 +322,17 @@ let current = '';
 let hashParams = new URLSearchParams();
 const routes = {
   home: homeView,
-  study: () => sessionView({ types: S.CARD_TYPES, mode: 'study' }),
-  article: () => sessionView({ types: [], mode: 'article' }),
+  study: () => sessionView({ from: 'study' }),
+  // practice on the nouns learned so far, asked for their article
+  article: () => {
+    practiceIds = S.practicePool(20, S.hasArticle).map((w) => w.id);
+    practiceBack = '#home';
+    return sessionView({ from: 'article', forceMode: 'article' });
+  },
   words: wordsView,
   add: addView,
   word: editView,
-  practice: practiceView,
+  practice: () => sessionView({ from: 'practice' }),
   formats: formatsView,
   stats: statsView,
   settings: settingsView,
@@ -459,11 +464,9 @@ function homeView() {
 
   const c = S.todayCounts();
   const st = S.stats();
-  const reviewTotal = S.CARD_TYPES.reduce((total, type) => total + c.due[type], 0);
-  const parts = S.CARD_TYPES.filter((ty) => c.due[ty]).map((ty) => `${t(`type.${ty}`)} ${c.due[ty]}`);
-  if (c.newLeft.spell) parts.push(t('home.extraNew', { n: c.newLeft.spell }));
-  const pool = S.drillPool();
-  const missed = pool.filter((w) => S.articleMisses(w) > 0).length;
+  const reviewTotal = c.due.meaning;
+  const learned = S.practicePool(1).length > 0;
+  const mode = getMode();
 
   // After a break: part of the reviews move to the next days and new words wait.
   const backlogHTML = c.overflow
@@ -480,7 +483,7 @@ function homeView() {
                 <div><div class="summary-label">${t('home.due')}</div><div class="summary-num c-tint">${reviewTotal}</div></div>
                 <div><div class="summary-label">${t('home.new')}</div><div class="summary-num c-blue">${c.newLeft.meaning}</div></div>
               </div>
-              <p class="secondary t-sub">${parts.join(' · ') || t('home.nothingDue')}</p>
+              ${reviewTotal ? '' : `<p class="secondary t-sub">${t('home.nothingDue')}</p>`}
               ${backlogHTML}
               <a class="btn" href="#study">${t('home.start')}<kbd>↵</kbd></a>
             </div>`
@@ -508,13 +511,12 @@ function homeView() {
 
     <section class="section">
       <div class="list">
-        ${row({
-          title: t('home.articleDrill'),
-          sub: !pool.length ? t('home.articleLocked') : missed ? t('home.articleMissed', { n: missed }) : t('home.articleFree'),
-          icon: stripesIcon,
-          href: '#article',
-        })}
+        <label class="row has-icon field">${icon('target', 'indigo')}<span class="grow">${t('home.mode')}</span>
+          <select id="studyMode">${MODES.map((m) => `<option value="${m}" ${m === mode ? 'selected' : ''}>${t(`mode.${m}`)}</option>`).join('')}</select>${ICON.chev}
+        </label>
+        <button class="row action has-icon" id="freePractice" ${learned ? '' : 'disabled'}>${stripesIcon}<div class="row-main"><div class="row-title">${t('home.practice')}</div><div class="row-sub">${learned ? t('home.practiceSub') : t('home.practiceLocked')}</div></div>${learned ? ICON.chev : ''}</button>
       </div>
+      <div class="section-footer" id="modeFoot">${esc(t(`mode.desc.${mode}`))} ${esc(t('mode.note'))}</div>
     </section>
 
     <section class="section">
@@ -536,6 +538,16 @@ function homeView() {
       </div>
     </section>`;
 
+  $('#studyMode').addEventListener('change', (e) => {
+    local.set('mode', e.target.value);
+    $('#modeFoot').textContent = `${t(`mode.desc.${e.target.value}`)} ${t('mode.note')}`;
+  });
+  // Words learned so far, picked at random with the ones that gave trouble more likely.
+  $('#freePractice').addEventListener('click', () => {
+    practiceIds = S.practicePool(20).map((w) => w.id);
+    practiceBack = '#home';
+    location.hash = '#practice';
+  });
   $('#moreNew')?.addEventListener('click', async () => {
     await S.addExtraNew(Math.min(10, c.unseen));
     location.hash = '#study';
@@ -588,11 +600,48 @@ function backupDue(words) {
   return Date.now() - since > 14 * DAY;
 }
 
+// Study modes. Every mode asks about the same word and updates the same schedule; only the
+// question differs. A word seen for the first time is always a plain card, since there is
+// nothing to recall yet.
+const MODES = ['recognize', 'recall', 'choice', 'listen', 'spell', 'article'];
+const MODE_CLASS = { recognize: 'meaning', recall: 'meaning', choice: 'meaning', listen: 'meaning', spell: 'spell', article: 'article' };
+const getMode = () => {
+  const m = local.get('mode', 'recognize');
+  return MODES.includes(m) ? m : 'recognize';
+};
+
+function shuffle(list) {
+  const out = [...list];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
 // What the last finished session left behind, so coming back from a word's edit page shows it again.
 let lastSummary = null;
+// Free practice: the words to go over, and where "back" leads.
+let practiceIds = [];
+let practiceBack = '#home';
 
-function sessionView({ types, mode }) {
-  const session = { types, sinceNew: 0, lastWordId: null, done: 0, again: 0, undo: null };
+/**
+ * A study session. `from` is the route it runs under: 'study' (today's reviews, which change
+ * the schedule), 'practice' (the words in practiceIds, which never do) or 'article' (practice
+ * on nouns, asked for their article).
+ */
+function sessionView({ from, forceMode = null }) {
+  const practice = from !== 'study';
+  const queue = practice ? shuffle(practiceIds.map((id) => state.words.get(id)).filter((w) => w && !w.deleted)) : [];
+  if (practice && !queue.length) {
+    toast(t(from === 'article' ? 'drill.empty' : 'practice.empty'), 3500);
+    location.hash = practiceBack;
+    return;
+  }
+  const total = queue.length;
+  const chosen = forceMode || getMode();
+  const session = { types: S.CARD_TYPES, sinceNew: 0, lastWordId: null, done: 0, again: 0, undo: null };
+  let known = 0;
   const missed = new Map(); // words not known at first sight in this session
   const guard = doubleTap();
   let rating = false;
@@ -608,22 +657,18 @@ function sessionView({ types, mode }) {
     (e, ...rest) =>
       guard.accept(e) && fn(e, ...rest);
 
-  function remaining() {
-    const c = S.todayCounts();
-    return types.reduce((sum, ty) => sum + c.answersLeft[ty], 0);
-  }
-
   function progress() {
-    const total = session.done + remaining();
-    return { total, pct: total ? Math.round((session.done / total) * 100) : 100 };
+    if (practice) return { done: known, total, pct: Math.round((known / total) * 100) };
+    const sum = session.done + S.todayCounts().answersLeft.meaning;
+    return { done: session.done, total: sum, pct: sum ? Math.round((session.done / sum) * 100) : 100 };
   }
 
   function updateProgress() {
-    const { total, pct } = progress();
+    const { done, total: sum, pct } = progress();
     const fill = $('.progress-fill');
     if (fill) fill.style.width = `${pct}%`;
     const text = $('.progress-text');
-    if (text) text.textContent = `${session.done} / ${total}`;
+    if (text) text.textContent = `${done} / ${sum}`;
   }
 
   function shell(inner, actions, meta = '') {
@@ -631,22 +676,18 @@ function sessionView({ types, mode }) {
     // rate a word that is no longer on screen.
     keyHandler = null;
     rating = false;
-    const { total, pct } = progress();
-    const drillMode = mode === 'article'; // free practice changes nothing: no progress, nothing to undo
+    const { done, total: sum, pct } = progress();
     $app.innerHTML = `
       <div class="study">
         <div class="study-bar">
-          <a href="#home" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a>
+          <a href="${practice ? practiceBack : '#home'}" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a>
+          <div class="progress" aria-label="${t('study.progress')}">
+            <div class="progress-track"><div class="progress-fill" data-w="${pct}"></div></div>
+            <div class="progress-text">${done} / ${sum}</div>
+          </div>
           ${
-            drillMode
-              ? '<span></span>'
-              : `<div class="progress" aria-label="${t('study.progress')}">
-                  <div class="progress-track"><div class="progress-fill" data-w="${pct}"></div></div>
-                  <div class="progress-text">${session.done} / ${total}</div>
-                </div>`
-          }
-          ${
-            drillMode
+            // practice changes nothing, so there is nothing to undo
+            practice
               ? '<span></span>'
               : `<button class="icon-btn glass" id="undoBtn" aria-label="${t('study.undo')}" ${session.undo ? '' : 'disabled'}>${ICON.undo}</button>`
           }
@@ -662,66 +703,126 @@ function sessionView({ types, mode }) {
     $('#undoBtn')?.addEventListener('click', doUndo);
   }
 
+  // Other meanings to put next to the right one: the same kind of word first.
+  function distractors(w) {
+    const mine = shortMeaning(w.zh);
+    const pool = S.liveWords().filter((x) => x.id !== w.id && x.zh && shortMeaning(x.zh) !== mine);
+    const out = [];
+    for (const list of [shuffle(pool.filter((x) => x.pos === w.pos)), shuffle(pool)]) {
+      for (const x of list) {
+        if (out.length < 3 && !out.some((o) => shortMeaning(o.zh) === shortMeaning(x.zh))) out.push(x);
+      }
+    }
+    return out.length === 3 ? out : null;
+  }
+
+  // The mode a word is asked in. A mode that cannot work for this word (no meaning to
+  // type, no voice, not a noun) falls back to the plain card.
+  function modeFor(w) {
+    if (S.getCard(w, 'meaning').state === 'new') return 'recognize';
+    switch (chosen) {
+      case 'recall':
+      case 'spell':
+        return w.zh ? chosen : 'recognize';
+      case 'choice':
+        return w.zh && distractors(w) ? 'choice' : 'recognize';
+      case 'listen':
+        return ttsAvailable() ? 'listen' : 'recognize';
+      case 'article':
+        return S.hasArticle(w) ? 'article' : 'recognize';
+      default:
+        return 'recognize';
+    }
+  }
+
   function next() {
     if (!alive) return;
     timers.forEach(clearTimeout);
     timers = [];
-    const item = S.pickNext(session);
+    const item = practice ? (queue[0] ? { w: queue[0] } : null) : S.pickNext(session);
     if (!item) return finish();
     session.lastWordId = item.w.id;
-    show(item.w, item.t);
+    show(item.w);
   }
 
-  function show(w, ty) {
-    if (ty === 'spell') spellCard(w);
-    else meaningCard(w);
+  function show(w) {
+    const cards = { recognize: recognizeCard, recall: recallCard, choice: choiceCard, listen: listenCard, spell: spellCard, article: articleCard };
+    cards[modeFor(w)](w);
   }
 
-  async function rate(w, ty, g, shownAt, { advance = true, article = null } = {}) {
+  // Answers of the automatic modes: right and quick is "know it", right but slow "fuzzy".
+  const autoGrade = (ok, ms, fast) => (!ok ? 1 : practice || ms < fast ? 3 : 2);
+
+  async function rate(w, g, shownAt, { advance = true, article = null, how = 'recognize' } = {}) {
     if (rating) return;
     rating = true;
-    const snap = await S.answer(w, ty, g, Date.now() - shownAt, Date.now(), article);
-    // A word forgotten again and again deserves a note or a pause rather than more drilling.
-    const lapses = state.words.get(w.id)?.cards[ty]?.lapses || 0;
-    if (g === 1 && (lapses === 4 || lapses === 8)) {
-      const target = wordLink(w, mode);
-      toast(t('study.leech', { w: displayWord(w), n: lapses }), { ms: 6000, action: t('edit'), onAction: () => (location.hash = target) });
+    if (practice) {
+      if (article && !article.ok) await S.missArticle(w);
+      queue.shift();
+      if (g < 3) {
+        session.again++;
+        // bring it back a few cards later
+        queue.splice(Math.min(3, queue.length), 0, w);
+      } else known++;
+      session.done++;
+    } else {
+      const snap = await S.answer(w, 'meaning', g, Date.now() - shownAt, Date.now(), article, how);
+      // A word forgotten again and again deserves a note or a pause rather than more drilling.
+      const lapses = state.words.get(w.id)?.cards.meaning?.lapses || 0;
+      if (g === 1 && (lapses === 4 || lapses === 8)) {
+        const target = wordLink(w, from);
+        toast(t('study.leech', { w: displayWord(w), n: lapses }), { ms: 6000, action: t('edit'), onAction: () => (location.hash = target) });
+      }
+      const added = g < 3 && !missed.has(w.id);
+      if (added) missed.set(w.id, g);
+      session.undo = { snap, g, added, id: w.id };
+      session.done++;
+      if (g === 1) session.again++;
     }
-    const added = g < 3 && !missed.has(w.id);
-    if (added) missed.set(w.id, g);
-    session.undo = { snap, ty, g, added, id: w.id };
-    session.done++;
-    if (g === 1) session.again++;
     if (advance) next();
     else updateProgress();
   }
 
   async function doUndo() {
     if (!session.undo) return;
-    const { snap, ty, g, added, id } = session.undo;
+    const { snap, g, added, id } = session.undo;
     session.undo = null;
     const w = await S.undo(snap);
     if (added) missed.delete(id);
     if (g === 1) session.again = Math.max(0, session.again - 1);
     session.done = Math.max(0, session.done - 1);
     session.lastWordId = w.id;
-    show(state.words.get(w.id), ty);
+    show(state.words.get(w.id));
   }
 
-  function metaHTML(w, ty) {
-    const c = S.getCard(w, ty);
-    const tags = [`<span class="tag t-${ty}">${t(`type.${ty}`)}</span>`];
+  function metaHTML(w, how) {
+    const c = S.getCard(w, 'meaning');
+    const tags = [`<span class="tag t-${MODE_CLASS[how]}">${t(`mode.${how}`)}</span>`];
     if (c.state === 'new') tags.push(`<span class="tag new">${t('tag.new')}</span>`);
     else if (rechecking(c, Date.now())) tags.push(`<span class="tag relearn">${t('tag.again')}</span>`);
     if (w.tags?.length) tags.push(`<span class="tag">${esc(w.tags[0])}</span>`);
     return tags.join('');
   }
 
-  // Three grades, as in MaiMemo. `grades` narrows them, e.g. no "know" after a wrong article.
+  // Three grades, as in MaiMemo; free practice only asks "not yet" or "got it".
+  // `grades` narrows them, e.g. no "know" after a wrong article.
   function ratingButtons(grades = [1, 2, 3]) {
-    return `<div class="rate n${grades.length}">${grades
-      .map((g) => `<button class="r${g}" data-g="${g}"><b>${t(`rate.${g}`)}</b><kbd>${g}</kbd></button>`)
+    const shown = practice ? grades.filter((g) => g !== 2) : grades;
+    const label = (g) => (practice ? t(g === 1 ? 'practice.again' : 'practice.know') : t(`rate.${g}`));
+    const key = (g) => (practice && g === 3 ? 2 : g);
+    return `<div class="rate n${shown.length}">${shown
+      .map((g) => `<button class="r${g}${practice && g === 3 ? ' def' : ''}" data-g="${g}"${practice ? ` id="${g === 1 ? 'notYet' : 'gotIt'}"` : ''}><b>${label(g)}</b><kbd>${key(g)}</kbd></button>`)
       .join('')}</div>`;
+  }
+  // The grade a key stands for, among the grades on offer.
+  const keyGrade = (k, grades) => {
+    const g = practice ? { 1: 1, 2: 3 }[k] : { 1: 1, 2: 2, 3: 3 }[k];
+    return g && grades.includes(g) ? g : null;
+  };
+  // Show the rating bar and wire it; `onRate(g)` runs when one is chosen.
+  function showRating(grades, onRate) {
+    $('.study-actions').innerHTML = ratingButtons(grades);
+    $$('.rate button').forEach((b) => b.addEventListener('click', tap(() => onRate(+b.dataset.g))));
   }
 
   function articleHint(w) {
@@ -737,24 +838,48 @@ function sessionView({ types, mode }) {
     return { hint, exception: !comp && rule && rule.article !== w.article };
   }
 
-  function meaningCard(w) {
+  // The part of a card that shows once it is turned: forms, meaning, example, notes.
+  const answerHTML = (w, { withWord = false } = {}) => {
+    const extra = [posLabel(w.pos), pluralLabel(w), w.forms].filter(Boolean).map(esc).join(' · ');
+    return `<div class="answer" id="answer" hidden>
+      ${withWord ? `<div class="word-big${displayWord(w).length > 22 ? ' long' : ''}" id="wordBig" lang="de">${wordHTML(w)}</div>` : ''}
+      ${extra ? `<div class="sub">${extra}</div>` : ''}
+      <div class="zh">${esc(w.zh) || `<span class="tertiary">${t('card.noMeaning')}</span>`}</div>
+      ${
+        w.example
+          ? `<div class="example"><button class="say-example" id="sayExample" lang="de" aria-label="${t('listen')}">${ttsAvailable() ? `${ICON.speaker} ` : ''}${esc(w.example)}</button>${w.exampleZh ? `<div class="secondary">${esc(w.exampleZh)}</div>` : ''}</div>`
+          : ''
+      }
+      ${w.notes ? `<div class="notes">${esc(w.notes)}</div>` : ''}
+      <a class="edit-link" href="${wordLink(w, from)}">${ICON.edit} ${t('edit')}</a>
+    </div>`;
+  };
+  const wireExample = (w, isRevealed) =>
+    $('#sayExample')?.addEventListener('click', (e) => {
+      if (!isRevealed()) return;
+      e.stopPropagation();
+      speak(w.example);
+    });
+  const revealBtn = `<button class="btn" id="reveal">${t('card.reveal')}<kbd>${t('key.space')}</kbd></button>`;
+
+  // ---- recognize: see the German word, rate how well it is known
+  function recognizeCard(w) {
     const shownAt = Date.now();
     const isNew = S.getCard(w, 'meaning').state === 'new';
-    // A noun met for the first time is shown with its article, since there is nothing to
-    // recall yet; from the next time on the article is asked and picking it shows the answer.
-    const askArticle = state.settings.articleFirst && S.hasArticle(w) && !isNew;
+    // With the option on, a noun seen before is asked for its article first, and picking it
+    // also turns the card; a noun met for the first time is shown whole.
+    const askArticle = state.settings.askArticle && S.hasArticle(w) && !isNew;
     const seenHints = local.get('artHints', 0);
     if (askArticle && seenHints < 3) local.set('artHints', seenHints + 1);
     let revealed = false;
     let article = null;
     let grades = [1, 2, 3];
-    const extra = [posLabel(w.pos), pluralLabel(w), w.forms].filter(Boolean).map(esc).join(' · ');
     const front = askArticle ? `<span class="g"><span class="lemma">${esc(w.lemma)}</span></span>` : wordHTML(w);
-    let actions = `<button class="btn" id="reveal">${t('card.reveal')}<kbd>${t('key.space')}</kbd></button>`;
+    let actions = revealBtn;
     if (askArticle) {
       actions = `<div class="art-buttons">${ARTICLES.map((a, i) => `<button class="art-btn b-${a}" data-a="${a}" lang="de">${a}<kbd>${i + 1}</kbd></button>`).join('')}</div>
         <button class="text-btn" id="skipArt">${t('card.skipArticle')}</button>`;
-    } else if (isNew) {
+    } else if (isNew && !practice) {
       actions = `<div class="two even"><button class="btn gray" id="known">${t('card.known')}</button>${actions}</div>`;
     }
     shell(
@@ -763,20 +888,10 @@ function sessionView({ types, mode }) {
         ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="${t('listen')}">${ICON.speak}</button>` : ''}
         ${askArticle && seenHints < 3 ? `<div class="secondary t-sub hint-line" id="artHint">${t('card.pickArticle')}</div>` : ''}
         <div class="article-result" id="artResult" hidden></div>
-        <div class="answer" id="answer" hidden>
-          ${extra ? `<div class="sub">${extra}</div>` : ''}
-          <div class="zh">${esc(w.zh) || `<span class="tertiary">${t('card.noMeaning')}</span>`}</div>
-          ${
-            w.example
-              ? `<div class="example"><button class="say-example" id="sayExample" lang="de" aria-label="${t('listen')}">${ttsAvailable() ? `${ICON.speaker} ` : ''}${esc(w.example)}</button>${w.exampleZh ? `<div class="secondary">${esc(w.exampleZh)}</div>` : ''}</div>`
-              : ''
-          }
-          ${w.notes ? `<div class="notes">${esc(w.notes)}</div>` : ''}
-          <a class="edit-link" href="${wordLink(w, mode)}">${ICON.edit} ${t('edit')}</a>
-        </div>
+        ${answerHTML(w)}
       </div>`,
       actions,
-      metaHTML(w, 'meaning'),
+      metaHTML(w, 'recognize'),
     );
     // Before the article is picked only the bare noun is read out.
     const say = () => speak(askArticle && !revealed ? w.lemma : displayWord(w));
@@ -785,19 +900,13 @@ function sessionView({ types, mode }) {
       say();
     });
     if (state.settings.autoSpeak) say();
-
-    $('#sayExample')?.addEventListener('click', (e) => {
-      if (!revealed) return;
-      e.stopPropagation();
-      speak(w.example);
-    });
+    wireExample(w, () => revealed);
     const reveal = () => {
       if (revealed) return;
       revealed = true;
       $('#answer').hidden = false;
       $('#artHint')?.remove();
-      $('.study-actions').innerHTML = ratingButtons(grades);
-      $$('.rate button').forEach((b) => b.addEventListener('click', tap(() => rate(w, 'meaning', +b.dataset.g, shownAt, { article }))));
+      showRating(grades, (g) => rate(w, g, shownAt, { article }));
     };
     // Show the article in the word and, for a wrong or skipped one, the rule that helps.
     const showArticle = (ok, line) => {
@@ -831,7 +940,7 @@ function sessionView({ types, mode }) {
     $('#skipArt')?.addEventListener('click', tap(skip));
     $('#reveal')?.addEventListener('click', tap(reveal));
     // Already familiar: first review in about two weeks instead of the first few days.
-    $('#known')?.addEventListener('click', tap(() => rate(w, 'meaning', 4, shownAt)));
+    $('#known')?.addEventListener('click', tap(() => rate(w, 4, shownAt)));
     if (!askArticle) {
       $('#flash').addEventListener(
         'click',
@@ -842,46 +951,200 @@ function sessionView({ types, mode }) {
     keyHandler = (e) => {
       if (e.key === 'r' || e.key === 'p') return say();
       const confirm = e.key === ' ' || e.key === 'Enter';
+      const g = revealed ? keyGrade(e.key, grades) : null;
       if (!revealed && askArticle && ARTICLE_KEYS[e.key]) pick(ARTICLE_KEYS[e.key]);
       else if (!revealed && confirm) {
         e.preventDefault();
         askArticle ? skip() : reveal();
-      } else if (revealed && grades.includes(+e.key)) rate(w, 'meaning', +e.key, shownAt, { article });
+      } else if (g) rate(w, g, shownAt, { article });
       else if (revealed && confirm) {
         e.preventDefault();
-        rate(w, 'meaning', grades.at(-1), shownAt, { article });
+        rate(w, grades.at(-1), shownAt, { article });
       } else if (e.key === 'z' || e.key === 'u') doUndo();
     };
   }
 
-  // Free article practice. It never changes the schedule; misses are counted so those nouns
-  // come up more often here.
-  function articleCard(w, onDone) {
+  // ---- recall: see the meaning, think of the German word, turn the card
+  function recallCard(w) {
+    const shownAt = Date.now();
+    let revealed = false;
+    const hint = posLabel(w.pos);
+    shell(
+      `<div class="card-body flash" id="flash">
+        <div class="big-zh">${esc(shortMeaning(w.zh))}</div>
+        ${hint ? `<div class="secondary t-sub hint-line">${hint}</div>` : ''}
+        ${w.exampleZh ? `<div class="example secondary">${esc(w.exampleZh)}</div>` : ''}
+        <div class="recall-gap"></div>
+        ${answerHTML(w, { withWord: true })}
+      </div>`,
+      revealBtn,
+      metaHTML(w, 'recall'),
+    );
+    wireExample(w, () => revealed);
+    const reveal = () => {
+      if (revealed) return;
+      revealed = true;
+      $('.recall-gap').remove();
+      $('#answer').hidden = false;
+      // the meaning is the question here, so it is not repeated in the answer
+      $('#answer .zh')?.remove();
+      showRating([1, 2, 3], (g) => rate(w, g, shownAt, { how: 'recall' }));
+      sayAfter(displayWord(w), 0);
+    };
+    $('#reveal').addEventListener('click', tap(reveal));
+    $('#flash').addEventListener('click', tap((e) => !e.target.closest('a') && reveal()));
+    keyHandler = (e) => {
+      const confirm = e.key === ' ' || e.key === 'Enter';
+      const g = revealed ? keyGrade(e.key, [1, 2, 3]) : null;
+      if (!revealed && confirm) {
+        e.preventDefault();
+        reveal();
+      } else if (g) rate(w, g, shownAt, { how: 'recall' });
+      else if (revealed && confirm) {
+        e.preventDefault();
+        rate(w, 3, shownAt, { how: 'recall' });
+      } else if (e.key === 'z' || e.key === 'u') doUndo();
+    };
+  }
+
+  // ---- listen: only the sound, think of which word it is
+  function listenCard(w) {
+    const shownAt = Date.now();
+    let revealed = false;
+    shell(
+      `<div class="card-body flash" id="flash">
+        <button class="speak listen" id="speak" aria-label="${t('listen')}">${ICON.speak}</button>
+        <div class="secondary t-sub hint-line" id="listenHint">${t('card.listenHint')}</div>
+        ${answerHTML(w, { withWord: true })}
+      </div>`,
+      revealBtn,
+      metaHTML(w, 'listen'),
+    );
+    const say = () => speak(displayWord(w));
+    $('#speak').addEventListener('click', (e) => {
+      e.stopPropagation();
+      say();
+    });
+    // this mode is the sound, so it plays whatever the read-aloud setting says
+    later(say, 150);
+    wireExample(w, () => revealed);
+    const reveal = () => {
+      if (revealed) return;
+      revealed = true;
+      $('#listenHint').remove();
+      $('#answer').hidden = false;
+      showRating([1, 2, 3], (g) => rate(w, g, shownAt, { how: 'listen' }));
+    };
+    $('#reveal').addEventListener('click', tap(reveal));
+    $('#flash').addEventListener('click', tap((e) => !e.target.closest('a, #speak') && reveal()));
+    keyHandler = (e) => {
+      if (e.key === 'r' || e.key === 'p') return say();
+      const confirm = e.key === ' ' || e.key === 'Enter';
+      const g = revealed ? keyGrade(e.key, [1, 2, 3]) : null;
+      if (!revealed && confirm) {
+        e.preventDefault();
+        reveal();
+      } else if (g) rate(w, g, shownAt, { how: 'listen' });
+      else if (revealed && confirm) {
+        e.preventDefault();
+        rate(w, 3, shownAt, { how: 'listen' });
+      } else if (e.key === 'z' || e.key === 'u') doUndo();
+    };
+  }
+
+  // After an automatic answer: wrong ones wait for a tap so the right answer can sink in,
+  // right ones move on by themselves.
+  function afterAnswer({ pause, onTap }) {
+    let moved = false;
+    const go = () => {
+      if (moved) return;
+      moved = true;
+      next();
+    };
+    if (!pause) later(go, 800);
+    $('.card').addEventListener('click', (e) => guard.accept(e) && !e.target.closest('a') && go());
+    onTap?.(go);
+    keyHandler = (e) => {
+      if (e.key === ' ' || e.key === 'Enter') {
+        e.preventDefault();
+        go();
+      } else if ((e.key === 'z' || e.key === 'u') && !practice) doUndo();
+    };
+  }
+
+  // ---- choice: pick the right meaning among four
+  function choiceCard(w) {
+    const shownAt = Date.now();
+    const options = shuffle([w, ...distractors(w)]);
+    let answered = false;
+    shell(
+      `<div class="card-body">
+        <div class="word-big${displayWord(w).length > 22 ? ' long' : ''}" id="wordBig" lang="de">${wordHTML(w)}</div>
+        ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="${t('listen')}">${ICON.speak}</button>` : ''}
+        <div class="feedback" id="fb"></div>
+      </div>`,
+      `<div class="choices">${options
+        .map((o, i) => `<button class="choice" data-id="${esc(o.id)}"><span>${esc(shortMeaning(o.zh))}</span><kbd>${i + 1}</kbd></button>`)
+        .join('')}</div>`,
+      metaHTML(w, 'choice'),
+    );
+    const say = () => speak(displayWord(w));
+    $('#speak')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      say();
+    });
+    if (state.settings.autoSpeak) say();
+    const choose = (id) => {
+      if (answered) return;
+      answered = true;
+      const ok = id === w.id;
+      sound(ok ? 'right' : 'wrong');
+      $$('.choice').forEach((b) => b.classList.add(b.dataset.id === w.id ? 'correct' : b.dataset.id === id ? 'wrong' : 'dim'));
+      const extra = [posLabel(w.pos), pluralLabel(w), w.forms].filter(Boolean).map(esc).join(' · ');
+      $('#fb').className = `feedback ${ok ? 'ok' : 'bad'}`;
+      $('#fb').innerHTML = `
+        ${extra ? `<div class="fb-hint">${extra}</div>` : ''}
+        ${w.example ? `<div class="fb-hint" lang="de">${esc(w.example)}</div>` : ''}
+        ${ok ? '' : `<div class="tap-hint">${t('drill.tapToContinue')}</div><a class="edit-link" href="${wordLink(w, from)}">${ICON.edit} ${t('edit')}</a>`}`;
+      sayAfter(displayWord(w), ok ? 250 : 0);
+      rate(w, autoGrade(ok, Date.now() - shownAt, 6000), shownAt, { advance: false, how: 'choice' });
+      afterAnswer({ pause: !ok });
+    };
+    $$('.choice').forEach((b) =>
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (guard.accept(e) && !answered) choose(b.dataset.id);
+      }),
+    );
+    keyHandler = (e) => {
+      const o = options[+e.key - 1];
+      if (o) choose(o.id);
+      else if (e.key === 'r' || e.key === 'p') say();
+      else if ((e.key === 'z' || e.key === 'u') && !practice) doUndo();
+    };
+  }
+
+  // ---- article: only the article of a noun
+  function articleCard(w) {
     const shownAt = Date.now();
     let answered = false;
     shell(
       `<div class="card-body">
-        <div class="drill-word" lang="de">${esc(w.lemma)}</div>
+        <div class="drill-word${w.lemma.length > 18 ? ' long' : ''}" lang="de">${esc(w.lemma)}</div>
         <div class="drill-zh">${esc(shortMeaning(w.zh))}</div>
         <div class="feedback" id="fb"></div>
       </div>`,
       `<div class="art-buttons">
         ${ARTICLES.map((a, i) => `<button class="art-btn b-${a}" data-a="${a}" lang="de">${a}<kbd>${i + 1}</kbd></button>`).join('')}
       </div>`,
-      `<span class="tag t-article">${t('drill.free')}</span>` + drill.scoreHTML(),
+      metaHTML(w, 'article'),
     );
-
-    let go = null;
-    const choose = async (a) => {
+    const choose = (a) => {
       if (answered) return;
       answered = true;
       const ok = a === w.article;
       sound(ok ? 'right' : 'wrong');
-      $$('.art-btn').forEach((b) => {
-        if (b.dataset.a === w.article) b.classList.add('correct');
-        else if (b.dataset.a === a) b.classList.add('wrong');
-        else b.classList.add('dim');
-      });
+      $$('.art-btn').forEach((b) => b.classList.add(b.dataset.a === w.article ? 'correct' : b.dataset.a === a ? 'wrong' : 'dim'));
       const { hint, exception } = articleHint(w);
       const pl = pluralLabel(w);
       const pause = !ok || exception;
@@ -889,39 +1152,26 @@ function sessionView({ types, mode }) {
         <div class="fb-badge">${ok ? t('drill.correct') : t('drill.wrong')}</div>
         <div class="fb-word" lang="de">${wordHTML(w)}${pl ? `<span class="secondary"> · ${esc(pl)}</span>` : ''}</div>
         ${hint ? `<div class="fb-hint">${hint}</div>` : ''}
-        ${pause ? `<div class="tap-hint">${t('drill.tapToContinue')}</div><a class="edit-link" href="${wordLink(w, mode)}">${ICON.edit} ${t('edit')}</a>` : ''}`;
+        ${pause ? `<div class="tap-hint">${t('drill.tapToContinue')}</div><a class="edit-link" href="${wordLink(w, from)}">${ICON.edit} ${t('edit')}</a>` : ''}`;
       $('#fb').className = `feedback ${ok ? 'ok' : 'bad'}`;
       sayAfter(displayWord(w), 250);
-      if (!ok) await S.missArticle(w);
-      onDone(ok);
-      let moved = false;
-      go = () => {
-        if (moved) return;
-        moved = true;
-        drill.next();
-      };
-      // Pause on a miss or an exception so it can sink in; otherwise move on by itself.
-      if (!pause) later(go, 750);
-      keyHandler = (e) => {
-        if (e.key === ' ' || e.key === 'Enter') {
-          e.preventDefault();
-          go();
-        }
-      };
+      rate(w, autoGrade(ok, Date.now() - shownAt, 2500), shownAt, { advance: false, article: { ok }, how: 'article' });
+      // pause on a miss or an exception so it can sink in
+      afterAnswer({ pause });
     };
     $$('.art-btn').forEach((b) =>
       b.addEventListener('click', (e) => {
         e.stopPropagation();
-        if (guard.accept(e)) answered ? go?.() : choose(b.dataset.a);
+        if (guard.accept(e) && !answered) choose(b.dataset.a);
       }),
     );
-    $('.card').addEventListener('click', (e) => guard.accept(e) && !e.target.closest('a') && answered && go?.());
     keyHandler = (e) => {
       const map = { 1: 'der', 2: 'die', 3: 'das', j: 'der', k: 'die', l: 'das' };
       if (map[e.key]) choose(map[e.key]);
     };
   }
 
+  // ---- spell: see the meaning, type the German
   function spellCard(w) {
     const shownAt = Date.now();
     const needArticle = w.pos === 'noun' && w.article;
@@ -930,7 +1180,7 @@ function sessionView({ types, mode }) {
       .join(' · ');
     shell(
       `<div class="card-body">
-        <div class="big-zh">${esc(w.zh)}</div>
+        <div class="big-zh">${esc(shortMeaning(w.zh))}</div>
         ${hint ? `<div class="secondary t-sub hint-line">${hint}</div>` : ''}
         ${w.exampleZh ? `<div class="example secondary">${esc(w.exampleZh)}</div>` : ''}
         <form id="spellForm" class="spell-form" autocomplete="off">
@@ -957,9 +1207,10 @@ function sessionView({ types, mode }) {
         input.focus();
       }),
     );
+    const spellRate = (g, opts = {}) => rate(w, g, shownAt, { how: 'spell', ...opts });
 
     let checked = false;
-    const finish = (res) => {
+    const finishCard = (res) => {
       checked = true;
       input.disabled = true;
       input.blur();
@@ -976,12 +1227,12 @@ function sessionView({ types, mode }) {
         <div class="fb-word" lang="de">${wordHTML(w)}</div>
         ${res.why ? `<div class="fb-hint">${t(`spell.why.${res.why}`)}</div>` : ''}
         ${w.example ? `<div class="fb-hint" lang="de">${esc(w.example)}</div>` : ''}
-        <a class="edit-link" href="${wordLink(w, mode)}">${ICON.edit} ${t('edit')}</a>`;
+        <a class="edit-link" href="${wordLink(w, from)}">${ICON.edit} ${t('edit')}</a>`;
       sayAfter(displayWord(w), cls === 'ok' || cls === 'bad' ? 250 : 0);
 
       // Typed exactly right: that is "know", no need to say so again.
       if (cls === 'ok') {
-        rate(w, 'spell', 3, shownAt, { advance: false });
+        spellRate(3, { advance: false });
         $('.study-actions').innerHTML = `<button class="btn" id="nextCard">${t('continue')}<kbd>↵</kbd></button>`;
         $('#nextCard').addEventListener('click', tap(next));
         later(next, 1200);
@@ -989,13 +1240,13 @@ function sessionView({ types, mode }) {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             next();
-          } else if (e.key === 'z' || e.key === 'u') doUndo();
+          } else if ((e.key === 'z' || e.key === 'u') && !practice) doUndo();
         };
         return;
       }
       let buttons;
       let def = null;
-      if (self) buttons = [1, 2, 3].map((g) => [g, t(`rate.${g}`)]);
+      if (self) buttons = null;
       else if (cls === 'near') {
         buttons = [
           [1, t('rate.1')],
@@ -1009,16 +1260,31 @@ function sessionView({ types, mode }) {
         ];
         def = 1;
       }
-      $('.study-actions').innerHTML = `<div class="rate n${buttons.length}">${buttons
+      if (!buttons) {
+        // showed the answer without typing: rate it like a recall card
+        showRating([1, 2, 3], (g) => spellRate(g));
+        keyHandler = (e) => {
+          const g = keyGrade(e.key, [1, 2, 3]);
+          if (g) spellRate(g);
+          else if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            spellRate(3);
+          }
+        };
+        return;
+      }
+      // in practice a near miss counts as "got it" and a wrong answer as "not yet"
+      const shown = practice ? buttons.filter(([g]) => g === 1 || g === 3 || g === 2) : buttons;
+      $('.study-actions').innerHTML = `<div class="rate n${shown.length}">${shown
         .map(([g, l]) => `<button class="r${g} ${g === def ? 'def' : ''}" data-g="${g}"><b>${l}</b></button>`)
         .join('')}</div>`;
-      $$('.rate button').forEach((b) => b.addEventListener('click', tap(() => rate(w, 'spell', +b.dataset.g, shownAt))));
+      $$('.rate button').forEach((b) => b.addEventListener('click', tap(() => spellRate(+b.dataset.g))));
       keyHandler = (e) => {
         if ((e.key === 'Enter' || e.key === ' ') && def) {
           e.preventDefault();
-          rate(w, 'spell', def, shownAt);
+          spellRate(def);
         } else if (['1', '2', '3'].includes(e.key) && buttons.some(([g]) => g === +e.key)) {
-          rate(w, 'spell', +e.key, shownAt);
+          spellRate(+e.key);
         }
       };
     };
@@ -1026,7 +1292,7 @@ function sessionView({ types, mode }) {
       if (checked) return;
       const v = input.value.trim();
       if (!v) return input.focus();
-      finish(checkSpelling(v, w));
+      finishCard(checkSpelling(v, w));
     };
     $('#spellForm').addEventListener('submit', (e) => {
       e.preventDefault();
@@ -1036,63 +1302,18 @@ function sessionView({ types, mode }) {
     // Showing the answer without typing turns the card into a self-rated recall.
     $('#giveUp').addEventListener(
       'click',
-      tap(() => !checked && finish({ result: 'self' })),
+      tap(() => !checked && finishCard({ result: 'self' })),
     );
-  }
-
-  let drill = null;
-  function startDrill() {
-    const pool = S.drillPool();
-    if (!pool.length) {
-      $app.innerHTML = `
-        <div class="study">
-          <div class="study-bar"><a href="#home" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a><span></span><span></span></div>
-          <div class="finish">
-            <div class="done-circle tint">${stripesIcon}</div>
-            <h2>${t('drill.emptyTitle')}</h2>
-            <p class="secondary">${t('drill.empty')}</p>
-            <div class="btns"><a class="btn gray" href="#home">${t('finish.home')}</a></div>
-          </div>
-        </div>`;
-      return;
-    }
-    const recent = [];
-    let right = 0;
-    let total = 0;
-    let streak = 0;
-    drill = {
-      scoreHTML: () =>
-        total
-          ? `<span class="tag">${right}/${total}</span>${streak >= 3 ? `<span class="tag t-article">${t('drill.streak', { n: streak })}</span>` : ''}`
-          : '',
-      next() {
-        if (!alive) return;
-        timers.forEach(clearTimeout);
-        timers = [];
-        const w = S.pickDrill(pool, recent);
-        recent.push(w.id);
-        if (recent.length > Math.min(15, pool.length - 1)) recent.shift();
-        articleCard(w, (ok) => {
-          total++;
-          if (ok) {
-            right++;
-            streak++;
-          } else streak = 0;
-        });
-      },
-    };
-    drill.next();
   }
 
   function finish() {
     keyHandler = null;
     const now = Date.now();
+    if (practice) return finishPractice();
     const pending = [];
     for (const w of S.liveWords()) {
-      for (const ty of types) {
-        const c = w.cards[ty];
-        if (rechecking(c, now)) pending.push(c.recheck);
-      }
+      const c = w.cards.meaning;
+      if (rechecking(c, now)) pending.push(c.recheck);
     }
     pending.sort((a, b) => a - b);
     const counts = S.todayCounts();
@@ -1135,7 +1356,6 @@ function sessionView({ types, mode }) {
                 : ''
             }
             ${missedWords.length ? `<button class="btn tinted" id="practiceMissed">${t('finish.practiceMissed')}</button>` : ''}
-            <a class="btn tinted" href="#article">${t('home.articleDrill')}</a>
             <a class="btn gray" href="#home">${t('finish.home')}</a>
           </div>
         </div>
@@ -1144,16 +1364,35 @@ function sessionView({ types, mode }) {
       await S.addExtraNew(Math.min(10, counts.unseen));
       next();
     });
-    // Same free practice as from the word list; it leaves the schedule alone.
+    // Free practice never touches the schedule, so it is safe to go over the misses again.
     $('#practiceMissed')?.addEventListener('click', () => {
       practiceIds = missedWords.map((w) => w.id);
+      practiceBack = '#home';
       location.hash = '#practice';
     });
     syncNow();
   }
 
-  if (mode === 'article') startDrill();
-  else next();
+  function finishPractice() {
+    sound('done');
+    $app.innerHTML = `
+      <div class="study">
+        <div class="study-bar"><a href="${practiceBack}" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a><span></span><span></span></div>
+        <div class="finish">
+          <div class="done-circle">${ICON.check}</div>
+          <h2>${t('practice.doneTitle')}</h2>
+          <p class="secondary">${t('practice.doneBody', { n: total, again: session.again })}</p>
+          <p class="secondary t-foot">${t('practice.foot')}</p>
+          <div class="btns">
+            <button class="btn" id="again">${t('practice.restart')}</button>
+            <a class="btn gray" href="${practiceBack}">${t('practice.back')}</a>
+          </div>
+        </div>
+      </div>`;
+    $('#again').addEventListener('click', () => route());
+  }
+
+  next();
   return () => {
     alive = false;
     timers.forEach(clearTimeout);
@@ -1319,6 +1558,7 @@ function wordsView() {
   });
   $('#selPractice').addEventListener('click', () => {
     practiceIds = selectedWords().map((w) => w.id);
+    practiceBack = '#words';
     location.hash = '#practice';
   });
   $('#selTag').addEventListener('click', async () => {
@@ -1836,119 +2076,6 @@ function addView() {
   };
 }
 
-// Free practice over chosen words. It never touches the review schedule.
-let practiceIds = [];
-
-function practiceView() {
-  let queue = practiceIds.map((id) => state.words.get(id)).filter((w) => w && !w.deleted);
-  if (!queue.length) {
-    location.hash = '#words';
-    return;
-  }
-  for (let i = queue.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [queue[i], queue[j]] = [queue[j], queue[i]];
-  }
-  const total = queue.length;
-  let known = 0;
-  let again = 0;
-  const guard = doubleTap();
-
-  function show() {
-    const w = queue[0];
-    if (!w) return finish();
-    let revealed = false;
-    const pct = Math.round((known / total) * 100);
-    const extra = [posLabel(w.pos), pluralLabel(w), w.forms].filter(Boolean).map(esc).join(' · ');
-    $app.innerHTML = `
-      <div class="study">
-        <div class="study-bar">
-          <a href="#words" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a>
-          <div class="progress" aria-label="${t('study.progress')}">
-            <div class="progress-track"><div class="progress-fill" data-w="${pct}"></div></div>
-            <div class="progress-text">${known} / ${total}</div>
-          </div>
-          <span></span>
-        </div>
-        <div class="card-area">
-          <div class="card">
-            <div class="card-meta"><span class="tag t-meaning">${t('practice.tag')}</span></div>
-            <div class="card-body flash" id="flash">
-              <div class="word-big${displayWord(w).length > 22 ? ' long' : ''}" lang="de">${wordHTML(w)}</div>
-              ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="${t('listen')}">${ICON.speak}</button>` : ''}
-              <div class="answer" id="answer" hidden>
-                ${extra ? `<div class="sub">${extra}</div>` : ''}
-                <div class="zh">${esc(w.zh) || `<span class="tertiary">${t('card.noMeaning')}</span>`}</div>
-                ${w.example ? `<div class="example"><div lang="de">${esc(w.example)}</div>${w.exampleZh ? `<div class="secondary">${esc(w.exampleZh)}</div>` : ''}</div>` : ''}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="study-actions"><button class="btn" id="reveal">${t('card.reveal')}<kbd>${t('key.space')}</kbd></button></div>
-      </div>`;
-    const say = () => speak(displayWord(w));
-    $('#speak')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      say();
-    });
-    if (state.settings.autoSpeak) say();
-    const answer = (ok) => {
-      queue.shift();
-      if (ok) known++;
-      else {
-        again++;
-        // bring it back a few cards later
-        queue.splice(Math.min(3, queue.length), 0, w);
-      }
-      show();
-    };
-    const reveal = () => {
-      if (revealed) return;
-      revealed = true;
-      $('#answer').hidden = false;
-      $('.study-actions').innerHTML = `<div class="rate n2">
-        <button class="r1" id="notYet"><b>${t('practice.again')}</b></button>
-        <button class="r3 def" id="gotIt"><b>${t('practice.know')}</b></button>
-      </div>`;
-      $('#notYet').addEventListener('click', (e) => guard.accept(e) && answer(false));
-      $('#gotIt').addEventListener('click', (e) => guard.accept(e) && answer(true));
-    };
-    $('#reveal').addEventListener('click', (e) => guard.accept(e) && reveal());
-    $('#flash').addEventListener('click', (e) => guard.accept(e) && reveal());
-    keyHandler = (e) => {
-      if (!revealed && (e.key === ' ' || e.key === 'Enter')) {
-        e.preventDefault();
-        reveal();
-      } else if (revealed && e.key === '1') answer(false);
-      else if (revealed && (e.key === '2' || e.key === ' ' || e.key === 'Enter')) {
-        e.preventDefault();
-        answer(true);
-      } else if (e.key === 'r' || e.key === 'p') say();
-    };
-  }
-
-  function finish() {
-    keyHandler = null;
-    $app.innerHTML = `
-      <div class="study">
-        <div class="study-bar"><a href="#words" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a><span></span><span></span></div>
-        <div class="finish">
-          <div class="done-circle">${ICON.check}</div>
-          <h2>${t('practice.doneTitle')}</h2>
-          <p class="secondary">${t('practice.doneBody', { n: total, again })}</p>
-          <p class="secondary t-foot">${t('practice.foot')}</p>
-          <div class="btns">
-            <button class="btn" id="again">${t('practice.restart')}</button>
-            <a class="btn gray" href="#words">${t('practice.back')}</a>
-          </div>
-        </div>
-      </div>`;
-    $('#again').addEventListener('click', () => route());
-  }
-
-  show();
-}
-
 function formatsView() {
   setNav({ title: t('help.title'), back: { href: '#add', label: t('add.title') }, large: false });
   const cols = [
@@ -2099,9 +2226,9 @@ function statsView() {
     <section class="section">
       <div class="section-header">${t('stats.retention')}</div>
       <div class="list">
-        ${S.STAT_TYPES.map((ty) =>
-          row({ title: t(`type.${ty}`), detail: `<span class="t-headline strong">${pct(st.retention[ty])}</span>` }),
-        ).join('')}
+        ${S.STAT_TYPES.filter((ty) => ty === 'meaning' || st.retention[ty] != null)
+          .map((ty) => row({ title: t(ty === 'meaning' ? 'stats.recalled' : 'type.article'), detail: `<span class="t-headline strong">${pct(st.retention[ty])}</span>` }))
+          .join('')}
       </div>
       <div class="section-footer">${t('stats.retentionFoot', { p: Math.round(state.settings.retention * 100) })}</div>
     </section>
@@ -2251,8 +2378,7 @@ function settingsView() {
               .join('')}
           </select>${ICON.chev}
         </label>
-        <label class="row has-icon">${stripesIcon}<div class="row-main">${t('set.articleFirst')}</div><input type="checkbox" class="switch" id="articleFirst" ${s.articleFirst ? 'checked' : ''}></label>
-        <label class="row has-icon">${icon('pencil', 'green')}<div class="row-main">${t('set.spell')}</div><input type="checkbox" class="switch" id="spell" ${s.spell ? 'checked' : ''}></label>
+        <label class="row has-icon">${stripesIcon}<div class="row-main">${t('set.askArticle')}</div><input type="checkbox" class="switch" id="askArticle" ${s.askArticle ? 'checked' : ''}></label>
         <label class="row has-icon">${icon('speaker', 'red')}<div class="row-main">${t('set.autoSpeak')}</div><input type="checkbox" class="switch" id="autoSpeak" ${s.autoSpeak ? 'checked' : ''}></label>
         <label class="row has-icon">${icon('bell', 'orange')}<div class="row-main">${t('set.sound')}</div><input type="checkbox" class="switch" id="sound" ${s.sound ? 'checked' : ''}></label>
       </div>
@@ -2376,12 +2502,8 @@ function settingsView() {
     route();
   });
   $('#retention').addEventListener('change', (e) => S.saveSettings({ retention: +e.target.value }));
-  $('#spell').addEventListener('change', async (e) => {
-    await S.saveSettings({ spell: e.target.checked });
-    showEstimate();
-  });
   $('#autoSpeak').addEventListener('change', (e) => S.saveSettings({ autoSpeak: e.target.checked }));
-  $('#articleFirst').addEventListener('change', (e) => S.saveSettings({ articleFirst: e.target.checked }));
+  $('#askArticle').addEventListener('change', (e) => S.saveSettings({ askArticle: e.target.checked }));
   $('#sound').addEventListener('change', (e) => {
     S.saveSettings({ sound: e.target.checked });
     if (e.target.checked) play('right');

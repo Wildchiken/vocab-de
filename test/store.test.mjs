@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { state, getCard, acceptDay, dayKey, stats, makeWord, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, tagProgress, DEFAULT_SETTINGS } from '../public/js/store.js';
+import { state, getCard, acceptDay, dayKey, stats, makeWord, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, tagProgress, practicePool, DEFAULT_SETTINGS } from '../public/js/store.js';
 import { MIN, DAY, dayStart, newCard } from '../public/js/fsrs.js';
 
 const now = new Date('2026-09-27T10:00:00').getTime();
@@ -55,16 +55,6 @@ test('extra new words raise today\'s limit only for today', () => {
   state.extraNew = { day: 0, n: 0 };
 });
 
-test('no spelling card for a word without a meaning', () => {
-  const w = noun('Tisch', 'der', 1);
-  w.cards.meaning = { state: 'review', due: now + 9 * DAY, s: 10, d: 5, reps: 3, lapses: 0, step: 0, last: now - DAY, firstAt: now - 20 * DAY };
-  setWords([w]);
-  state.settings.spell = true;
-  assert.equal(eligible(w, 'spell'), true);
-  w.zh = '';
-  assert.equal(eligible(w, 'spell'), false);
-});
-
 test('the card just answered is not shown again right away', () => {
   const w = noun('Tisch', 'der', 1);
   w.cards.meaning = { state: 'review', due: now + DAY, s: 1, d: 5, reps: 1, lapses: 0, last: now, recheck: now + 5 * MIN, firstAt: now };
@@ -73,16 +63,6 @@ test('the card just answered is not shown again right away', () => {
   assert.equal(pickNext({ ...session(), lastWordId: w.id }, now), null);
   // with another word answered last, it may be done early
   assert.equal(pickNext({ ...session(), lastWordId: 'other' }, now).w.id, w.id);
-});
-
-test('spelling unlocks only once the meaning has held for a while', () => {
-  const w = noun('Tisch', 'der', 1);
-  const review = (reps, s) => ({ state: 'review', due: now + DAY, s, d: 5, reps, lapses: 0, step: 0, last: now, firstAt: now - DAY });
-  state.settings.spell = true;
-  w.cards.meaning = review(1, 3.7); // known at first sight
-  assert.equal(eligible(w, 'spell'), false);
-  w.cards.meaning = review(4, 12);
-  assert.equal(eligible(w, 'spell'), true);
 });
 
 test('the newest batch is learned first, each batch in its own order', () => {
@@ -162,26 +142,6 @@ test('an unchanged copy from the server is not re-sent', () => {
   assert.deepEqual(reconcile(w, newer), { ...newer, dirty: false });
 });
 
-test('the daily time estimate follows the number of new words', () => {
-  setWords([noun('A', 'der', 1), makeWord({ lemma: 'gehen', pos: 'verb', zh: 'go' })]);
-  state.settings.spell = true;
-  const a = estimateMinutes(20);
-  assert.ok(a > 30 && a < 70, String(a));
-  assert.ok(estimateMinutes(10) < a);
-  state.settings.spell = false;
-  assert.ok(estimateMinutes(20) < a);
-  state.settings.spell = true;
-});
-
-test('a new word counts as two answers for the progress bar', () => {
-  setWords([noun('Tisch', 'der', 1), makeWord({ lemma: 'gehen', pos: 'verb', zh: 'go' })]);
-  state.settings.newPerDay = 5;
-  const c = todayCounts(now);
-  assert.equal(c.newLeft.meaning, 2);
-  assert.equal(c.answersLeft.meaning, 4);
-  assert.equal(c.newLeft.spell, 0);
-});
-
 test('article misses only grow when merging, and a reset starts them over', () => {
   const a = noun('Tisch', 'der', 1);
   const b = structuredClone(a);
@@ -251,4 +211,47 @@ test('stored card numbers are short and an unseen word has no card yet', async (
   assert.deepEqual(w.cards, {});
   const card = (await import('../public/js/fsrs.js')).schedule(newCard(), 3, now, {}, () => 0.5);
   for (const v of [card.s, card.d]) assert.ok(String(v).replace(/^\d+\./, '').length <= 4, `${v}`);
+});
+
+test('a new word counts as two answers for the progress bar', () => {
+  setWords([noun('Tisch', 'der', 1), makeWord({ lemma: 'gehen', pos: 'verb', zh: 'go' })]);
+  state.settings.newPerDay = 5;
+  const c = todayCounts(now);
+  assert.equal(c.newLeft.meaning, 2);
+  assert.equal(c.answersLeft.meaning, 4);
+  assert.deepEqual(Object.keys(c.due), ['meaning']);
+});
+
+test('the daily time estimate follows the number of new words', () => {
+  setWords([noun('A', 'der', 1)]);
+  const a = estimateMinutes(20);
+  assert.ok(a > 20 && a < 45, String(a));
+  assert.ok(estimateMinutes(10) < a);
+  // slower answers, longer days: the estimate uses the user's own median
+  state.logs = Array.from({ length: 40 }, (_, i) => ({ id: `s${i}`, t: 'meaning', ms: 15000, ts: now - i, g: 3, st: 'review' }));
+  assert.ok(estimateMinutes(20) > a * 1.5);
+});
+
+test('free practice draws learned words, more often the ones that were forgotten', () => {
+  const learned = (lemma, lapses = 0, misses = 0) => {
+    const w = noun(lemma, 'der', 1);
+    w.cards.meaning = { state: 'review', due: now + DAY, s: 5, d: 5, reps: 3, lapses, last: now - DAY, firstAt: now - 9 * DAY };
+    w.artMiss = misses;
+    return w;
+  };
+  const fresh = noun('Neu', 'die', 2);
+  const hard = learned('Schwer', 4, 3);
+  const easy = Array.from({ length: 9 }, (_, i) => learned(`Leicht${i}`));
+  const paused = learned('Pause');
+  paused.suspended = true;
+  setWords([fresh, hard, paused, ...easy]);
+  assert.equal(practicePool(50).length, 10, 'unseen and suspended words are left out');
+  assert.ok(!practicePool(50).some((w) => w.lemma === 'Neu' || w.lemma === 'Pause'));
+  assert.equal(practicePool(3).length, 3);
+  // the forgotten word is in a pool of 3 out of 10 much more often than chance (30%)
+  let hits = 0;
+  for (let i = 0; i < 400; i++) if (practicePool(3).includes(hard)) hits++;
+  assert.ok(hits > 400 * 0.5, `hits ${hits}`);
+  // filters: only nouns with a given tag, say
+  assert.deepEqual(practicePool(50, (w) => w.lemma === 'Schwer'), [hard]);
 });

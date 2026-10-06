@@ -15,7 +15,8 @@ test('every key used in the UI exists', () => {
   const used = new Set([...src.matchAll(/\bt\('([\w.]+)'/g)].map((m) => m[1]));
   // keys built at runtime
   const dynamic = [
-    ...['meaning', 'article', 'spell'].map((k) => `type.${k}`),
+    ...['meaning', 'article'].map((k) => `type.${k}`),
+    ...['recognize', 'recall', 'choice', 'listen', 'spell', 'article'].flatMap((k) => [`mode.${k}`, `mode.desc.${k}`]),
     ...['new', 'learning', 'young', 'mature', 'suspended'].map((k) => `st.${k}`),
     ...['noun', 'verb', 'adj', 'adv', 'prep', 'conj', 'phrase', 'sentence', 'other'].map((k) => `pos.${k}`),
     ...['off', 'idle', 'syncing', 'pending', 'error', 'offline'].map((k) => `sync.${k}`),

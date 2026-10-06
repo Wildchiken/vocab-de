@@ -6,11 +6,13 @@ A German vocabulary trainer that runs in the browser. It works on phones, tablet
 
 ![Tablet home screen with today's reviews and new words](docs/screenshots/en/home.png)
 
-| Article feedback and three grades | Search and organize words | Progress in dark mode |
+| Recognize and three grades | Search and organize words | Progress in dark mode |
 |:---:|:---:|:---:|
-| <a href="docs/screenshots/en/study.png"><img src="docs/screenshots/en/study.png" width="250" alt="Meaning card with article feedback, an example sentence and three rating buttons"></a> | <a href="docs/screenshots/en/words.png"><img src="docs/screenshots/en/words.png" width="250" alt="Word list with search, tag and status filters, colored articles and plural forms"></a> | <a href="docs/screenshots/en/stats.png"><img src="docs/screenshots/en/stats.png" width="250" alt="Dark statistics screen with study counts, word status and progress by tag"></a> |
+| <a href="docs/screenshots/en/study.png"><img src="docs/screenshots/en/study.png" width="250" alt="German word and meaning, an example sentence and three rating buttons"></a> | <a href="docs/screenshots/en/words.png"><img src="docs/screenshots/en/words.png" width="250" alt="Word list with search, tag and status filters, colored articles and plural forms"></a> | <a href="docs/screenshots/en/stats.png"><img src="docs/screenshots/en/stats.png" width="250" alt="Dark statistics screen with study counts, word status and progress by tag"></a> |
 
 Screenshots use the starter vocabulary and simulated review history, captured in a desktop browser at tablet and phone sizes. Click an image to view it in full.
+
+More study modes: [Recall](docs/screenshots/en/recall.png) · [Choice](docs/screenshots/en/choice.png) · [Spell](docs/screenshots/en/spell.png) · [Article](docs/screenshots/en/article.png).
 
 ## Features
 
@@ -20,14 +22,14 @@ Screenshots use the starter vocabulary and simulated review history, captured in
 - Free practice for a selection or a tag, without touching the review schedule, for a quick pass before a test
 - Statistics list the words you keep forgetting, and a word you miss again and again gets a nudge to add an example or break it down
 
-- One card per word: see the German, recall the meaning, and rate it Don't know / Fuzzy / Know it, as in MaiMemo. A noun met for the first time is shown with its article; from then on the article is asked: picking der / die / das also reveals the answer, or you can look at the answer if you don't remember it. A wrong or forgotten article caps that answer at Fuzzy, since knowing a German noun includes its gender. This can be turned off in Settings
+- One schedule per word, and a **study mode** you choose on the home screen (remembered): Recognize (see the German and rate Don't know / Fuzzy / Know it, the default and as in MaiMemo), Recall (see the meaning, think of the German), Choice (pick the meaning among four), Listen (only the sound), Spell (see the meaning and type the German, marked automatically) and Article (only der / die / das). Changing the mode only changes the question: the words due today stay the same and the answer updates the same schedule, so the amount of review does not grow. A word met for the first time is always shown in Recognize, and a word that a mode can't handle (no meaning, not a noun, no German voice in the browser) falls back to it.
 - Words you already know from a long list: tap "Already know it" on a new card and its first review is set about two weeks out, so you don't have to go through every word. At the end of a round, the words you missed are listed, so you can add a note or go over them again
-- Optional spelling practice (off by default): see the meaning and type the German (nouns with their article), once the meaning is well learned. A correct answer counts as Know it; tap Show answer to recall without typing. Turning it on roughly doubles the daily time
+- In Recognize there is an option, "Ask the article of nouns when recognizing" (Settings, off by default): nouns seen before are shown without der / die / das, and picking one also shows the answer; a wrong or forgotten article caps that answer at Fuzzy, since knowing a German noun includes its gender.
 - Scheduling uses [FSRS](https://github.com/open-spaced-repetition/fsrs4anki/wiki/The-Algorithm) (created by Jarrett Ye, who worked on MaiMemo's memory algorithm; FSRS grew out of MaiMemo's DHP model), with a target recall of 85%, 90% or 95%. The first answer of the day decides the next review; a word marked Don't know or Fuzzy comes back a few minutes later that day until you know it, without affecting the long-term schedule
 - A predictable workload: one "new words per day" setting, with an estimate of daily minutes two months in based on your own answer speed. After a break, piled-up reviews are spread over a few days and new words pause meanwhile
 - The most recently added batch of words is learned first, in its own order, so this week's lesson or a word you just met doesn't wait behind a long list
 - When you miss an article, you get the relevant ending rule (-ung → die, -chen → das, ...), the head noun of a compound (Haustür → die Tür), or a note that the word is an exception
-- Article drill: learned nouns at random, with the ones you get wrong more often; it doesn't change your schedule
+- Free practice (home screen, or select words in the word list): random learned words, with the ones you forget or miss the article of more likely to come up, using the same study modes; it doesn't change your schedule.
 - Short sounds for right and wrong answers and for finishing a session, which can be turned off in Settings; they stay quiet when the phone is on silent
 - Word list progress: the Stats screen shows, per tag, how many words you have seen and mastered, and estimates the day the list is finished at your daily pace. Adding and editing offer dictionary shortcuts (Wiktionary, LEO, dict.cc or 德语助手), opened in a new tab; the app itself sends nothing to them
 - Adding from elsewhere: select a word on a web page, tap a bookmark, and the Add screen opens with the word and the sentence around it as its example; iOS Shortcuts and your own tools can use the same link. The format and the bookmarklet are on the Import formats page

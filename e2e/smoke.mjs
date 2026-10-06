@@ -56,16 +56,32 @@ async function run(name, engine) {
     await page.locator('.rate').waitFor();
     assert.equal(await logCount(page), 0, 'double-tap on "show answer" rated the card');
 
-    // Not knowing it brings the word back, and now its article is asked
+    // Not knowing it brings the word back a few minutes later (made due here instead of waiting)
     await page.waitForTimeout(450);
     await page.locator('.rate .r1').tap();
     await page.locator('#reveal, #known').first().waitFor();
-    await page.evaluate(async () => {
-      const S = await import('/js/store.js');
-      const w = S.liveWords().find((x) => x.lemma === 'Tisch');
-      w.cards.meaning.recheck = Date.now() - 1000;
-      await S.saveWord(w);
-    });
+    const due = () =>
+      page.evaluate(async () => {
+        const S = await import('/js/store.js');
+        const w = S.liveWords().find((x) => x.lemma === 'Tisch');
+        w.cards.meaning.recheck = Date.now() - 1000;
+        await S.saveWord(w);
+      });
+    await due();
+    // By default a word is simply recognized: the German is shown whole and the answer is rated
+    await page.evaluate(() => (location.hash = '#home'));
+    await page.evaluate(() => (location.hash = '#study'));
+    await page.locator('#reveal').waitFor();
+    assert.equal(await page.locator('.art-btn').count(), 0, 'the article is not asked unless that is switched on');
+    assert.match(await page.locator('#wordBig').innerText(), /^der Tisch$/);
+    await page.waitForTimeout(450);
+    await page.locator('#reveal').tap();
+    await page.waitForTimeout(450);
+    await page.locator('.rate .r3').tap();
+
+    // With "ask the article" on, a noun seen before is asked first; a wrong one leaves two grades
+    await page.evaluate(async () => (await import('/js/store.js')).saveSettings({ askArticle: true }));
+    await due();
     await page.evaluate(() => (location.hash = '#home'));
     await page.evaluate(() => (location.hash = '#study'));
     await page.locator('.art-btn').first().waitFor();
@@ -78,21 +94,82 @@ async function run(name, engine) {
     });
     await page.locator(`.art-btn.b-${wrong}`).dblclick();
     await page.locator('.rate').waitFor();
-    assert.equal(await page.locator('.rate button').count(), 2, 'a wrong article should leave only Don\'t know / Fuzzy');
+    assert.equal(await page.locator('.rate button').count(), 2, "a wrong article should leave only Don't know / Fuzzy");
     assert.equal(await logCount(page), before, 'double-tap on an article rated the card');
     await page.waitForTimeout(450);
     await page.locator('.rate .r2').tap();
     const log = await page.evaluate(async () => (await import('/js/store.js')).state.logs.at(-1));
     assert.deepEqual([log.t, log.st, log.g, log.a], ['meaning', 'recheck', 2, 0]);
+    await page.evaluate(async () => (await import('/js/store.js')).saveSettings({ askArticle: false }));
 
     // Finish the round: the missed words are listed
     for (let i = 0; i < 80 && !(await page.locator('.finish').count()); i++) {
       await page.waitForTimeout(400);
       if (await page.locator('.rate').count()) await page.locator('.rate button').last().tap();
       else if (await page.locator('#skipArt').count()) await page.locator('#skipArt').tap();
+      else if (await page.locator('#known').count()) await page.locator('#reveal').tap();
       else if (await page.locator('#reveal').count()) await page.locator('#reveal').tap();
     }
     await page.locator('.finish').waitFor();
+
+    // Every study mode shows its own question, and all of them rate the same card
+    const wordsDue = () =>
+      page.evaluate(async () => {
+        const S = await import('/js/store.js');
+        const { schedule } = await import('/js/fsrs.js');
+        for (const w of S.liveWords()) {
+          if (S.getCard(w, 'meaning').state === 'new') w.cards.meaning = schedule(S.getCard(w, 'meaning'), 3, Date.now() - 3 * 864e5, S.state.settings);
+          w.cards.meaning = { ...w.cards.meaning, due: Date.now() - 1000, recheck: undefined };
+          delete w.cards.meaning.recheck;
+        }
+        await S.addWords([]);
+        await Promise.all(S.liveWords().map((w) => S.saveWord(w)));
+      });
+    const askedAs = {
+      recall: '.big-zh',
+      choice: '.choice',
+      spell: '#spellIn',
+      article: '.art-btn',
+    };
+    for (const [mode, selector] of Object.entries(askedAs)) {
+      await wordsDue();
+      await page.evaluate((m) => localStorage.setItem('vocab-de:mode', JSON.stringify(m)), mode);
+      await page.evaluate(() => (location.hash = '#home'));
+      await page.evaluate(() => (location.hash = '#study'));
+      await page.locator(selector).first().waitFor();
+      const asked = await page.evaluate(() => document.querySelector('.tag')?.textContent);
+      assert.ok(asked, `${mode} shows its name`);
+    }
+    // the choice mode grades by itself, and a right answer rates the card right away
+    await page.evaluate(() => localStorage.setItem('vocab-de:mode', JSON.stringify('choice')));
+    await wordsDue();
+    await page.evaluate(() => (location.hash = '#home'));
+    await page.evaluate(() => (location.hash = '#study'));
+    await page.locator('.choice').first().waitFor();
+    const choiceBefore = await logCount(page);
+    await page.waitForTimeout(450);
+    const rightOne = await page.evaluate(async () => {
+      const S = await import('/js/store.js');
+      const text = document.querySelector('#wordBig').textContent.replace(/^(der|die|das)\s/, '').trim();
+      const w = S.liveWords().find((x) => x.lemma === text);
+      return w.id;
+    });
+    await page.locator(`.choice[data-id="${rightOne}"]`).tap();
+    await page.waitForFunction(async (n) => (await import('/js/store.js')).state.logs.length === n + 1, choiceBefore);
+    const picked = await page.evaluate(async () => (await import('/js/store.js')).state.logs.at(-1));
+    assert.deepEqual([picked.g, picked.m], [3, 'choice']);
+    await page.evaluate(() => localStorage.removeItem('vocab-de:mode'));
+
+    // Free practice from the home screen never touches the cards
+    await page.evaluate(() => (location.hash = '#home'));
+    const cardsBefore = await page.evaluate(async () => JSON.stringify((await import('/js/store.js')).liveWords().map((w) => w.cards)));
+    await page.locator('#freePractice').tap();
+    await page.locator('#reveal').waitFor();
+    await page.waitForTimeout(450);
+    await page.locator('#reveal').tap();
+    await page.waitForTimeout(450);
+    await page.locator('#gotIt').tap();
+    assert.equal(await page.evaluate(async () => JSON.stringify((await import('/js/store.js')).liveWords().map((w) => w.cards))), cardsBefore);
 
     // Practice from the word list: revealing and rating right away are different buttons, so both count
     await page.evaluate(() => (location.hash = '#words'));

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Study modes on the home screen: Recognize (default), Recall, Choice, Listen, Spell and Article. All of them ask about the same word and update the same schedule. Spelling is no longer a separate card that appears in the day's reviews, and "Pick the article first" is now the option "Ask the article of nouns when recognizing", off by default.
+- Free practice uses the same modes and has an entry on the home screen; it replaces the article drill.
+
 - Individual review entries are kept for 90 days; older ones become one summary per day, so storage and first sync on a new device no longer grow with the years. The streak and totals are kept. On the server entries are kept for 120 days.
 - Settings → Storage and sync: what is stored here and in the cloud, whether the browser keeps the data, and a Tidy up now button.
 - The Node server compresses text files and answers repeat requests with 304.

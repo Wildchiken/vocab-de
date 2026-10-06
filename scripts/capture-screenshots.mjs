@@ -72,10 +72,25 @@ try {
       await page.setViewportSize({ width: 390, height: 844 });
       await ready('study');
       await page.locator('#wordBig').filter({ hasText: 'Tisch' }).waitFor();
-      await page.locator('[data-a="der"]').tap();
+      await page.locator('#reveal').tap();
       assert.equal(await page.locator('.rate button').count(), 3);
       await page.waitForTimeout(350);
       await capture('study');
+
+      for (const [mode, selector] of [
+        ['recall', '#reveal'],
+        ['choice', '.choice'],
+        ['spell', '#spellIn'],
+        ['article', '.art-btn'],
+      ]) {
+        await ready('home');
+        await page.locator('#studyMode').selectOption(mode);
+        await ready('study');
+        await page.locator(selector).first().waitFor();
+        await capture(mode);
+      }
+      await ready('home');
+      await page.locator('#studyMode').selectOption('recognize');
 
       await ready('words');
       await page.locator('#list .row').first().waitFor();
@@ -87,7 +102,7 @@ try {
       await page.locator('.list-progress').first().waitFor();
       await capture('stats');
       assert.deepEqual(errors, []);
-      console.log(`Captured ${lang}: home, study, words, stats`);
+      console.log(`Captured ${lang}: home, study, recall, choice, spell, article, words, stats`);
     } finally { await context.close(); }
   }
 } finally {
