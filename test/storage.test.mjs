@@ -94,7 +94,50 @@ const DAY = 86_400_000;
 const now = Date.now();
 const logAt = (id, ageDays, g = 3, ms = 1000) => ({ id, w: 'w', t: 'meaning', g, ts: now - ageDays * DAY, ms, st: 'review', synced: true });
 const { dayStart } = await import('../public/js/fsrs.js');
-const { compactLogs, acceptDay, dayKey, exportData, importData } = S;
+const { compactLogs, acceptDay, dayKey, exportData, importData, backupText } = S;
+
+test('a backup leaves out deleted words and empty fields, and restores the rest as it was', async () => {
+  await S.resetLocalLibrary();
+  const kept = S.makeWord({ lemma: 'Tisch', article: 'der', pos: 'noun', zh: 'table', tags: ['A1'] });
+  const gone = S.makeWord({ lemma: 'Stuhl', article: 'der', pos: 'noun', zh: 'chair' });
+  const unseen = S.makeWord({ lemma: 'gehen' });
+  gone.deleted = true;
+  await S.addWords([kept, gone, unseen]);
+  await S.answer(kept, 'meaning', 3, 1500, Date.now(), null, 'choice');
+  await S.answer(kept, 'meaning', 1, 900, Date.now() + 1000, { ok: false });
+  assert.match(S.state.logs[0].id, /^[a-z0-9]{12}$/);
+
+  const data = exportData();
+  assert.equal(data.version, 2);
+  assert.deepEqual(data.words.map((w) => w.lemma).sort(), ['Tisch', 'gehen']);
+  const w = data.words.find((x) => x.lemma === 'Tisch');
+  for (const k of ['forms', 'example', 'exampleZh', 'notes', 'suspended', 'deleted', 'dirty']) assert.ok(!(k in w), `${k} is left out`);
+  assert.ok(!('cards' in data.words.find((x) => x.lemma === 'gehen')), 'a word not studied yet has no cards to write');
+  // review logs are short rows under their word; the meaning card's type is not repeated
+  assert.deepEqual(
+    data.logs[kept.id].map((row) => row.slice(2)),
+    [
+      [3, 1500, 'new', 'choice'],
+      [1, 900, 'review', null, 0],
+    ],
+  );
+
+  // one record per line, and still plain JSON
+  const text = backupText(data);
+  assert.deepEqual(JSON.parse(text), data);
+  assert.ok(text.split('\n').some((line) => line.startsWith('{"id":') && line.includes('"Tisch"')));
+
+  const strip = ({ dirty, synced, ...x }) => x;
+  const words = [kept, unseen].map((x) => strip(S.state.words.get(x.id)));
+  const logs = S.state.logs.map(strip);
+  await S.resetLocalLibrary();
+  assert.deepEqual(await importData(JSON.parse(text)), { words: 2, logs: 2, settings: false });
+  assert.deepEqual([kept, unseen].map((x) => strip(S.state.words.get(x.id))), words);
+  assert.deepEqual(S.state.logs.map(strip), logs);
+  assert.ok(!S.state.words.has(gone.id));
+  // importing the same backup again adds nothing
+  assert.deepEqual(await importData(JSON.parse(text)), { words: 0, logs: 0, settings: false });
+});
 
 test('logs older than 90 days are folded into one summary per day', async () => {
   S.state.logs = [logAt('a', 200), logAt('b', 200, 1, 2000), logAt('c', 150), logAt('new', 3)].sort((x, y) => x.ts - y.ts);

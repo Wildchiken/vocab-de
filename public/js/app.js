@@ -101,38 +101,59 @@ function toast(msg, opts = {}) {
 
 // In-app alert. Native confirm()/prompt() are blocked in some embedded browsers and return
 // "cancel" immediately, which made actions silently do nothing.
-// Resolves to true or false, or to 2 when the optional `alt` button is chosen.
-function dialog({ message, confirm: okLabel = t('ok'), destructive = false, input = null, alt = null }) {
+// Resolves to true or false, or to 2 when the optional `alt` button is chosen. With `options`
+// ([{ value, label, sub, disabled }]) it is a list to pick from instead: it resolves to the
+// value picked, or null.
+function dialog({ message, sub = '', confirm: okLabel = t('ok'), destructive = false, input = null, alt = null, options = null, current = null }) {
   return new Promise((resolve) => {
     const prev = document.activeElement;
     const el = document.createElement('div');
     el.className = 'dialog-backdrop';
-    el.innerHTML = `<div class="dialog glass" role="alertdialog" aria-modal="true" aria-labelledby="dlgMsg">
+    el.innerHTML = `<div class="dialog glass ${options ? 'picker' : ''}" role="${options ? 'dialog' : 'alertdialog'}" aria-modal="true" aria-labelledby="dlgMsg">
       <p id="dlgMsg">${esc(message)}</p>
+      ${sub ? `<p class="dialog-sub">${esc(sub)}</p>` : ''}
       ${input ? `<input class="dialog-input" placeholder="${esc(input.placeholder || '')}" autocomplete="off">` : ''}
-      <div class="dialog-buttons ${alt ? 'three' : ''}">
+      ${
+        options
+          ? `<div class="dialog-options">${options
+              .map(
+                (o, i) => `<button type="button" data-i="${i}" class="${o.value === current ? 'on' : ''}" ${o.disabled ? 'disabled' : ''}>
+                  <span class="opt-main"><b>${esc(o.label)}</b>${o.sub ? `<span>${esc(o.sub)}</span>` : ''}</span>${o.disabled ? '' : `<kbd>${i + 1}</kbd>`}
+                </button>`,
+              )
+              .join('')}</div>`
+          : ''
+      }
+      <div class="dialog-buttons ${options ? 'one' : alt ? 'three' : ''}">
         <button type="button" data-ok="0">${t('cancel')}</button>
-        ${alt ? `<button type="button" data-ok="2">${esc(alt)}</button>` : ''}
-        <button type="button" data-ok="1" class="${destructive ? 'destructive' : 'primary'}">${esc(okLabel)}</button>
+        ${alt && !options ? `<button type="button" data-ok="2">${esc(alt)}</button>` : ''}
+        ${options ? '' : `<button type="button" data-ok="1" class="${destructive ? 'destructive' : 'primary'}">${esc(okLabel)}</button>`}
       </div>
     </div>`;
     document.body.append(el);
     const field = el.querySelector('.dialog-input');
-    const close = (ok) => {
+    const finish = (value) => {
       document.removeEventListener('keydown', onKey, true);
       el.remove();
       prev?.focus?.();
-      resolve(input ? (ok ? field.value : null) : ok);
+      resolve(value);
     };
+    const close = (ok) => finish(options ? null : input ? (ok ? field.value : null) : ok);
+    const pick = (i) => {
+      const o = options?.[i];
+      if (o && !o.disabled) finish(o.value);
+    };
+    const currentIndex = options ? options.findIndex((o) => o.value === current && !o.disabled) : -1;
     // Capture phase, so study shortcuts don't fire while the dialog is open.
     const onKey = (e) => {
       if (e.key === 'Tab') {
         // keep focus inside the dialog
-        const items = [...el.querySelectorAll('input, button')];
+        const items = [...el.querySelectorAll('input, button:not(:disabled)')];
         const i = items.indexOf(document.activeElement);
         items[(i + (e.shiftKey ? -1 : 1) + items.length) % items.length].focus();
       } else if (e.key === 'Escape') close(false);
-      else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') close(true);
+      else if (options && /^[1-9]$/.test(e.key)) pick(+e.key - 1);
+      else if (e.key === 'Enter' && e.target.tagName !== 'BUTTON') options ? pick(currentIndex) : close(true);
       else return;
       e.preventDefault();
       e.stopPropagation();
@@ -140,10 +161,12 @@ function dialog({ message, confirm: okLabel = t('ok'), destructive = false, inpu
     document.addEventListener('keydown', onKey, true);
     el.addEventListener('click', (e) => {
       const b = e.target.closest('button');
-      if (b) close(b.dataset.ok === '2' ? 2 : b.dataset.ok === '1');
+      if (b?.dataset.i) pick(+b.dataset.i);
+      else if (b) close(b.dataset.ok === '2' ? 2 : b.dataset.ok === '1');
       else if (e.target === el) close(false);
     });
-    (field || el.querySelector('[data-ok="1"]')).focus();
+    const option = el.querySelector('.dialog-options .on:not(:disabled)') || el.querySelector('.dialog-options button:not(:disabled)');
+    (field || option || el.querySelector('[data-ok="1"]') || el.querySelector('[data-ok="0"]')).focus();
   });
 }
 
@@ -201,7 +224,7 @@ function downloadTemplate() {
 let pendingFile = null;
 
 async function exportBackup() {
-  download(`vocab-de-${stamp()}.json`, JSON.stringify(S.exportData()), 'application/json');
+  download(`vocab-de-${stamp()}.json`, S.backupText(), 'application/json');
   await S.markBackedUp();
 }
 
@@ -514,9 +537,15 @@ function homeView() {
         <label class="row has-icon field">${icon('target', 'indigo')}<span class="grow">${t('home.mode')}</span>
           <select id="studyMode">${MODES.map((m) => `<option value="${m}" ${m === mode ? 'selected' : ''}>${t(`mode.${m}`)}</option>`).join('')}</select>${ICON.chev}
         </label>
-        <button class="row action has-icon" id="freePractice" ${learned ? '' : 'disabled'}>${stripesIcon}<div class="row-main"><div class="row-title">${t('home.practice')}</div><div class="row-sub">${learned ? t('home.practiceSub') : t('home.practiceLocked')}</div></div>${learned ? ICON.chev : ''}</button>
+        <label class="row has-icon wrap" id="askArticleRow" ${mode === 'recognize' ? '' : 'hidden'}>${stripesIcon}<div class="row-main"><div class="row-title">${t('home.askArticle')}</div><div class="row-sub">${t('home.askArticleSub')}</div></div><input type="checkbox" class="switch" id="askArticle" ${state.settings.askArticle ? 'checked' : ''}></label>
       </div>
       <div class="section-footer" id="modeFoot">${esc(t(`mode.desc.${mode}`))} ${esc(t('mode.note'))}</div>
+    </section>
+
+    <section class="section">
+      <div class="list">
+        <button class="row action has-icon wrap" id="freePractice" ${learned ? '' : 'disabled'}>${icon('practice', 'blue')}<div class="row-main"><div class="row-title">${t('home.practice')}</div><div class="row-sub">${learned ? t('home.practiceSub') : t('home.practiceLocked')}</div></div>${learned ? ICON.chev : ''}</button>
+      </div>
     </section>
 
     <section class="section">
@@ -533,7 +562,7 @@ function homeView() {
       <div class="section-header">${t('home.overview')}</div>
       <div class="list">
         ${row({ title: t('home.streak'), icon: icon('flame', 'orange'), detail: t('n.days', { n: st.streak }) })}
-        ${row({ title: t('home.reviewed'), icon: icon('check', 'green'), detail: t('n.cards', { n: st.todayReviews }) })}
+        ${row({ title: t('home.reviewed'), icon: icon('check', 'green'), detail: t('n.answers', { n: st.todayReviews }) })}
         ${row({ title: t('home.mastered'), icon: icon('target', 'indigo'), detail: `${st.byStatus.mature} / ${st.total}`, href: '#stats' })}
       </div>
     </section>`;
@@ -541,13 +570,12 @@ function homeView() {
   $('#studyMode').addEventListener('change', (e) => {
     local.set('mode', e.target.value);
     $('#modeFoot').textContent = `${t(`mode.desc.${e.target.value}`)} ${t('mode.note')}`;
+    // asking the article first is a way of recognizing, so it sits with that mode
+    $('#askArticleRow').hidden = e.target.value !== 'recognize';
   });
+  $('#askArticle').addEventListener('change', (e) => S.saveSettings({ askArticle: e.target.checked }));
   // Words learned so far, picked at random with the ones that gave trouble more likely.
-  $('#freePractice').addEventListener('click', () => {
-    practiceIds = S.practicePool(20).map((w) => w.id);
-    practiceBack = '#home';
-    location.hash = '#practice';
-  });
+  $('#freePractice').addEventListener('click', () => startPractice({ back: '#home' }));
   $('#moreNew')?.addEventListener('click', async () => {
     await S.addExtraNew(Math.min(10, c.unseen));
     location.hash = '#study';
@@ -621,9 +649,56 @@ function shuffle(list) {
 
 // What the last finished session left behind, so coming back from a word's edit page shows it again.
 let lastSummary = null;
-// Free practice: the words to go over, and where "back" leads.
+// Free practice: the words to go over, the mode they are asked in, where "back" leads, and
+// the words as they were picked (null for a random draw), so they can be gone over again in
+// another mode.
 let practiceIds = [];
+let practiceMode = null;
 let practiceBack = '#home';
+let practicePicked = null;
+
+// Article practice is about nouns; every other mode takes any word.
+const fitsMode = (mode) => (w) => mode !== 'article' || S.hasArticle(w);
+
+/**
+ * Free practice never changes the schedule, so its mode is chosen each time it starts, apart
+ * from the study mode: the same words can be gone over by sound, then by spelling. `ids` are
+ * the words picked; without them, learned words are drawn at random for the chosen mode.
+ */
+async function startPractice({ ids = null, back }) {
+  const picked = ids && ids.map((id) => state.words.get(id)).filter((w) => w && !w.deleted);
+  const pool = picked || S.practicePool(Infinity);
+  if (!pool.length) return toast(t('practice.empty'), 3500);
+  const nouns = pool.filter(S.hasArticle).length;
+  const meanings = pool.some((w) => w.zh);
+  const why = (m) =>
+    m === 'listen' && !ttsAvailable()
+      ? 'mode.na.listen'
+      : m === 'article' && !nouns
+        ? 'mode.na.article'
+        : ['recall', 'choice', 'spell'].includes(m) && !meanings
+          ? 'mode.na.meaning'
+          : '';
+  const mode = await dialog({
+    message: picked ? t('practice.title', { n: picked.length }) : t('home.practice'),
+    sub: picked ? t('practice.foot') : t('home.practiceSub'),
+    options: MODES.map((m) => {
+      const na = why(m);
+      // when only some of the words picked are nouns, say how many article practice takes
+      const part = m === 'article' && picked && nouns && nouns < picked.length ? ` · ${t('mode.nouns', { n: nouns })}` : '';
+      return { value: m, label: t(`mode.${m}`), sub: na ? t(na) : t(`mode.short.${m}`) + part, disabled: Boolean(na) };
+    }),
+    current: local.get('practiceMode', getMode()),
+  });
+  if (!mode) return;
+  local.set('practiceMode', mode);
+  practiceIds = (picked ? picked.filter(fitsMode(mode)) : S.practicePool(20, fitsMode(mode))).map((w) => w.id);
+  practiceMode = mode;
+  practiceBack = back;
+  practicePicked = ids;
+  if (location.hash === '#practice') route();
+  else location.hash = '#practice';
+}
 
 /**
  * A study session. `from` is the route it runs under: 'study' (today's reviews, which change
@@ -632,14 +707,14 @@ let practiceBack = '#home';
  */
 function sessionView({ from, forceMode = null }) {
   const practice = from !== 'study';
-  const queue = practice ? shuffle(practiceIds.map((id) => state.words.get(id)).filter((w) => w && !w.deleted)) : [];
+  const chosen = forceMode || (practice && practiceMode) || getMode();
+  const queue = practice ? shuffle(practiceIds.map((id) => state.words.get(id)).filter((w) => w && !w.deleted && fitsMode(chosen)(w))) : [];
   if (practice && !queue.length) {
     toast(t(from === 'article' ? 'drill.empty' : 'practice.empty'), 3500);
     location.hash = practiceBack;
     return;
   }
   const total = queue.length;
-  const chosen = forceMode || getMode();
   const session = { types: S.CARD_TYPES, sinceNew: 0, lastWordId: null, done: 0, again: 0, undo: null };
   let known = 0;
   const missed = new Map(); // words not known at first sight in this session
@@ -657,18 +732,20 @@ function sessionView({ from, forceMode = null }) {
     (e, ...rest) =>
       guard.accept(e) && fn(e, ...rest);
 
+  // The bar follows answers, so it doesn't slide back when a word has to come again; the text
+  // counts the words still to do today, the same number the home screen showed.
   function progress() {
-    if (practice) return { done: known, total, pct: Math.round((known / total) * 100) };
-    const sum = session.done + S.todayCounts().answersLeft.meaning;
-    return { done: session.done, total: sum, pct: sum ? Math.round((session.done / sum) * 100) : 100 };
+    if (practice) return { text: `${known} / ${total}`, pct: Math.round((known / total) * 100) };
+    const counts = S.todayCounts();
+    const sum = session.done + counts.answersLeft.meaning;
+    return { text: t('study.left', { n: counts.total }), pct: sum ? Math.round((session.done / sum) * 100) : 100 };
   }
 
   function updateProgress() {
-    const { done, total: sum, pct } = progress();
+    const { text, pct } = progress();
     const fill = $('.progress-fill');
     if (fill) fill.style.width = `${pct}%`;
-    const text = $('.progress-text');
-    if (text) text.textContent = `${done} / ${sum}`;
+    if ($('.progress-text')) $('.progress-text').textContent = text;
   }
 
   function shell(inner, actions, meta = '') {
@@ -676,20 +753,20 @@ function sessionView({ from, forceMode = null }) {
     // rate a word that is no longer on screen.
     keyHandler = null;
     rating = false;
-    const { done, total: sum, pct } = progress();
+    const { text, pct } = progress();
     $app.innerHTML = `
       <div class="study">
         <div class="study-bar">
-          <a href="${practice ? practiceBack : '#home'}" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a>
+          <a href="${practice ? practiceBack : '#home'}" class="icon-btn glass" aria-label="${t('study.end')}" title="${t('study.end')}">${ICON.close}</a>
           <div class="progress" aria-label="${t('study.progress')}">
             <div class="progress-track"><div class="progress-fill" data-w="${pct}"></div></div>
-            <div class="progress-text">${done} / ${sum}</div>
+            <div class="progress-text">${text}</div>
           </div>
           ${
             // practice changes nothing, so there is nothing to undo
             practice
               ? '<span></span>'
-              : `<button class="icon-btn glass" id="undoBtn" aria-label="${t('study.undo')}" ${session.undo ? '' : 'disabled'}>${ICON.undo}</button>`
+              : `<button class="icon-btn glass" id="undoBtn" aria-label="${t('study.undo')}" title="${t('study.undo')} (Z)" ${session.undo ? '' : 'disabled'}>${ICON.undo}</button>`
           }
         </div>
         <div class="card-area">
@@ -717,9 +794,10 @@ function sessionView({ from, forceMode = null }) {
   }
 
   // The mode a word is asked in. A mode that cannot work for this word (no meaning to
-  // type, no voice, not a noun) falls back to the plain card.
+  // type, no voice, not a noun) falls back to the plain card. In practice the mode was picked
+  // for these very words, so it applies to words not studied yet as well.
   function modeFor(w) {
-    if (S.getCard(w, 'meaning').state === 'new') return 'recognize';
+    if (!practice && S.getCard(w, 'meaning').state === 'new') return 'recognize';
     switch (chosen) {
       case 'recall':
       case 'spell':
@@ -885,7 +963,7 @@ function sessionView({ from, forceMode = null }) {
     shell(
       `<div class="card-body flash" id="flash">
         <div class="word-big${displayWord(w).length > 22 ? ' long' : ''}" id="wordBig" lang="de">${front}</div>
-        ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="${t('listen')}">${ICON.speak}</button>` : ''}
+        ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="${t('listen')}" title="${t('listen')} (R)">${ICON.speak}</button>` : ''}
         ${askArticle && seenHints < 3 ? `<div class="secondary t-sub hint-line" id="artHint">${t('card.pickArticle')}</div>` : ''}
         <div class="article-result" id="artResult" hidden></div>
         ${answerHTML(w)}
@@ -1013,7 +1091,7 @@ function sessionView({ from, forceMode = null }) {
     let revealed = false;
     shell(
       `<div class="card-body flash" id="flash">
-        <button class="speak listen" id="speak" aria-label="${t('listen')}">${ICON.speak}</button>
+        <button class="speak listen" id="speak" aria-label="${t('listen')}" title="${t('listen')} (R)">${ICON.speak}</button>
         <div class="secondary t-sub hint-line" id="listenHint">${t('card.listenHint')}</div>
         ${answerHTML(w, { withWord: true })}
       </div>`,
@@ -1080,7 +1158,7 @@ function sessionView({ from, forceMode = null }) {
     shell(
       `<div class="card-body">
         <div class="word-big${displayWord(w).length > 22 ? ' long' : ''}" id="wordBig" lang="de">${wordHTML(w)}</div>
-        ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="${t('listen')}">${ICON.speak}</button>` : ''}
+        ${ttsAvailable() ? `<button class="speak" id="speak" aria-label="${t('listen')}" title="${t('listen')} (R)">${ICON.speak}</button>` : ''}
         <div class="feedback" id="fb"></div>
       </div>`,
       `<div class="choices">${options
@@ -1327,7 +1405,7 @@ function sessionView({ from, forceMode = null }) {
     const SHOWN = 30;
     $app.innerHTML = `
       <div class="study">
-        <div class="study-bar"><a href="#home" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a><span></span><span></span></div>
+        <div class="study-bar"><a href="#home" class="icon-btn glass" aria-label="${t('study.end')}" title="${t('study.end')}">${ICON.close}</a><span></span><span></span></div>
         <div class="finish">
           <div class="done-circle">${ICON.check}</div>
           <h2>${sum ? t('finish.title') : t('finish.none')}</h2>
@@ -1350,6 +1428,7 @@ function sessionView({ from, forceMode = null }) {
               : ''
           }
           <div class="btns">
+            ${pending.length ? `<button class="btn" id="seeAgain">${t('finish.seeAgain', { n: pending.length })}</button>` : ''}
             ${
               !counts.total && counts.unseen
                 ? `<button class="btn" id="moreNew">${t('home.moreNew', { n: Math.min(10, counts.unseen) })}</button>`
@@ -1364,12 +1443,14 @@ function sessionView({ from, forceMode = null }) {
       await S.addExtraNew(Math.min(10, counts.unseen));
       next();
     });
-    // Free practice never touches the schedule, so it is safe to go over the misses again.
-    $('#practiceMissed')?.addEventListener('click', () => {
-      practiceIds = missedWords.map((w) => w.id);
-      practiceBack = '#home';
-      location.hash = '#practice';
+    // The round stops rather than show the word just answered right away again; whoever
+    // doesn't want to come back in a minute can go on now.
+    $('#seeAgain')?.addEventListener('click', () => {
+      session.lastWordId = null;
+      next();
     });
+    // Free practice never touches the schedule, so it is safe to go over the misses again.
+    $('#practiceMissed')?.addEventListener('click', () => startPractice({ ids: missedWords.map((w) => w.id), back: '#home' }));
     syncNow();
   }
 
@@ -1377,7 +1458,7 @@ function sessionView({ from, forceMode = null }) {
     sound('done');
     $app.innerHTML = `
       <div class="study">
-        <div class="study-bar"><a href="${practiceBack}" class="icon-btn glass" aria-label="${t('study.end')}">${ICON.close}</a><span></span><span></span></div>
+        <div class="study-bar"><a href="${practiceBack}" class="icon-btn glass" aria-label="${t('study.end')}" title="${t('study.end')}">${ICON.close}</a><span></span><span></span></div>
         <div class="finish">
           <div class="done-circle">${ICON.check}</div>
           <h2>${t('practice.doneTitle')}</h2>
@@ -1385,11 +1466,13 @@ function sessionView({ from, forceMode = null }) {
           <p class="secondary t-foot">${t('practice.foot')}</p>
           <div class="btns">
             <button class="btn" id="again">${t('practice.restart')}</button>
-            <a class="btn gray" href="${practiceBack}">${t('practice.back')}</a>
+            ${from === 'practice' ? `<button class="btn tinted" id="otherMode">${t('practice.otherMode')}</button>` : ''}
+            <a class="btn gray" href="${practiceBack}">${practiceBack === '#words' ? t('practice.back') : t('finish.home')}</a>
           </div>
         </div>
       </div>`;
     $('#again').addEventListener('click', () => route());
+    $('#otherMode')?.addEventListener('click', () => startPractice({ ids: practicePicked, back: practiceBack }));
   }
 
   next();
@@ -1438,16 +1521,15 @@ function wordsView() {
       </select>
     </div>
     <section class="section">
-      <div class="section-header" id="count"></div>
+      <div class="section-header list-head"><span id="count"></span><button class="head-btn" id="practiceList" hidden>${ICON.practice}${t('words.practiceList')}</button></div>
       <div class="list" id="list"></div>
     </section>
     <div class="select-bar glass" id="selectBar" hidden>
-      <button class="sel-text" id="selAll"></button>
-      <span class="sel-count" id="selCount"></span>
-      <button class="sel-icon" id="selPractice" aria-label="${t('words.practice')}">${ICON.practice}</button>
-      <button class="sel-icon" id="selTag" aria-label="${t('words.addTag')}">${ICON.tag}</button>
-      <button class="sel-icon" id="selSuspend"></button>
-      <button class="sel-icon danger" id="selDelete" aria-label="${t('words.delete')}">${ICON.trash}</button>
+      <div class="sel-info"><button class="sel-text" id="selAll"></button><span class="sel-count" id="selCount"></span></div>
+      <button class="sel-act" id="selPractice">${ICON.practice}<span>${t('words.practice')}</span></button>
+      <button class="sel-act" id="selTag">${ICON.tag}<span>${t('edit.tags')}</span></button>
+      <button class="sel-act" id="selSuspend"></button>
+      <button class="sel-act danger" id="selDelete">${ICON.trash}<span>${t('words.delete')}</span></button>
     </div>`;
   if ($('#fTag')) $('#fTag').value = tag;
   $('#fStatus').value = status;
@@ -1479,6 +1561,8 @@ function wordsView() {
     filter();
     const progress = tag === 'all' ? null : S.tagProgress().find((r) => r.tag === tag);
     $('#count').textContent = [t('n.words', { n: list.length }), progress ? listProgressText(progress) : ''].filter(Boolean).join(' · ');
+    // What a tag, a status or a search narrowed down can be practiced as it is.
+    $('#practiceList').hidden = selecting || !list.length || (tag === 'all' && status === 'all' && !q);
     const box = $('#list');
     box.hidden = !list.length;
     box.innerHTML =
@@ -1523,9 +1607,7 @@ function wordsView() {
     const allSuspended = chosen.length > 0 && chosen.every((w) => w.suspended);
     $('#selAll').textContent = allOn ? t('words.selectNone') : t('words.selectAll');
     $('#selCount').textContent = t('words.selected', { n: chosen.length });
-    const sus = $('#selSuspend');
-    sus.innerHTML = allSuspended ? ICON.play : ICON.pause;
-    sus.setAttribute('aria-label', allSuspended ? t('words.resume') : t('words.suspend'));
+    $('#selSuspend').innerHTML = allSuspended ? `${ICON.play}<span>${t('words.resume')}</span>` : `${ICON.pause}<span>${t('words.suspend')}</span>`;
     for (const id of ['selPractice', 'selTag', 'selSuspend', 'selDelete']) $(`#${id}`).disabled = !chosen.length;
   }
 
@@ -1556,22 +1638,44 @@ function wordsView() {
     for (const w of list) allOn ? selected.delete(w.id) : selected.add(w.id);
     render();
   });
-  $('#selPractice').addEventListener('click', () => {
-    practiceIds = selectedWords().map((w) => w.id);
-    practiceBack = '#words';
-    location.hash = '#practice';
-  });
+  $('#selPractice').addEventListener('click', () => startPractice({ ids: selectedWords().map((w) => w.id), back: '#words' }));
+  $('#practiceList').addEventListener('click', () => startPractice({ ids: list.map((w) => w.id), back: '#words' }));
+  // Tags of the selection: add some, or take one off every selected word that has it. The
+  // selection stays, so the same words can be practiced or tagged further.
   $('#selTag').addEventListener('click', async () => {
-    const input = await dialog({
-      message: t('words.addTagPrompt'),
-      confirm: t('dlg.add'),
-      input: { placeholder: t('add.tagsPh') },
-    });
-    const add = (input || '').split(/[,，]/).map((x) => x.trim()).filter(Boolean);
-    if (!add.length) return;
-    await S.updateWords(selectedWords(), (w) => (w.tags = [...new Set([...(w.tags || []), ...add])]));
-    toast(t('words.tagged', { n: selected.size }));
-    route();
+    const chosen = selectedWords();
+    const has = new Map();
+    for (const w of chosen) for (const tag of w.tags || []) has.set(tag, (has.get(tag) || 0) + 1);
+    const ADD = Symbol('add');
+    const pick = has.size
+      ? await dialog({
+          message: t('words.tagTitle', { n: chosen.length }),
+          options: [
+            { value: ADD, label: t('words.addTag'), sub: t('words.addTagSub') },
+            ...[...has].map(([tag, n]) => ({ value: tag, label: t('words.removeTag', { tag }), sub: t('words.removeTagSub', { n }) })),
+          ],
+        })
+      : ADD;
+    if (pick === null) return;
+    if (pick === ADD) {
+      const input = await dialog({ message: t('words.addTagPrompt'), confirm: t('dlg.add'), input: { placeholder: t('words.tagPh') } });
+      const add = (input || '').split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+      if (!add.length) return;
+      await S.updateWords(chosen, (w) => (w.tags = [...new Set([...(w.tags || []), ...add])]));
+      toast(t('words.tagged', { n: chosen.length }));
+    } else {
+      const had = chosen.filter((w) => (w.tags || []).includes(pick));
+      const before = new Map(had.map((w) => [w.id, w.tags]));
+      await S.updateWords(had, (w) => (w.tags = w.tags.filter((x) => x !== pick)));
+      toast(t('words.untagged', { n: had.length, tag: pick }), {
+        action: t('study.undo'),
+        onAction: async () => {
+          await S.updateWords(had, (w) => (w.tags = before.get(w.id)));
+          if (current === 'words') refreshView?.();
+        },
+      });
+    }
+    refreshView?.();
   });
   $('#selSuspend').addEventListener('click', async () => {
     const chosen = selectedWords();
@@ -1637,13 +1741,16 @@ function editView(id, from) {
   setNav({ title: displayWord(w), back, large: false });
   const options = (keys, prefix, cur) =>
     keys.map((k) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${t(`${prefix}.${k}`)}</option>`).join('');
-  const cardRows = S.CARD_TYPES.filter((ty) => w.cards[ty] || S.eligible(w, ty))
-    .map((ty) => {
-      const c = S.getCard(w, ty);
-      const sub = c.state === 'new' ? '' : t('edit.progressSub', { s: c.s.toFixed(1), l: c.lapses || 0 });
-      return row({ title: t(`type.${ty}`), sub, detail: dueText(c) });
-    })
-    .join('');
+  // Where the word stands, in plain words: its status, when it comes next, how it went so far.
+  const card = S.getCard(w, 'meaning');
+  const misses = S.articleMisses(w);
+  const progressRow = row({
+    title: t(`st.${S.wordStatus(w)}`),
+    sub: [card.state === 'new' ? '' : t('edit.progressSub', { r: card.reps || 0, l: card.lapses || 0, d: card.s.toFixed(1) }), misses ? t('edit.articleMisses', { n: misses }) : '']
+      .filter(Boolean)
+      .join(' · '),
+    detail: w.suspended ? '' : dueText(card),
+  });
   const noAutoFix = 'autocapitalize="off" autocorrect="off" spellcheck="false"';
   const dictionaries = dictLinks(lookupTerm(w), getLang());
 
@@ -1661,9 +1768,9 @@ function editView(id, from) {
             </div>
           </div>
           <label class="row field"><span>${t('edit.german')}</span><input name="lemma" value="${esc(w.lemma)}" required lang="de" ${noAutoFix}></label>
-          <label class="row field"><span>${t('edit.plural')}</span><input name="plural" value="${esc(w.plural)}" placeholder="${esc(t('edit.pluralPh'))}" lang="de" ${noAutoFix}></label>
+          <label class="row field" id="pluralRow"><span>${t('edit.plural')}</span><input name="plural" value="${esc(w.plural)}" placeholder="${esc(t('edit.pluralPh'))}" lang="de" ${noAutoFix}></label>
           <label class="row field"><span>${t('edit.pos')}</span><select name="pos"><option value="">${t('edit.posUnset')}</option>${options(POS, 'pos', w.pos)}</select>${ICON.chev}</label>
-          <label class="row field"><span>${t('edit.forms')}</span><input name="forms" value="${esc(w.forms)}" placeholder="${esc(t('edit.formsPh'))}" lang="de" ${noAutoFix}></label>
+          <label class="row field" id="formsRow"><span>${t('edit.forms')}</span><input name="forms" value="${esc(w.forms)}" lang="de" ${noAutoFix}></label>
         </div>
       </section>
       <section class="section">
@@ -1694,7 +1801,7 @@ function editView(id, from) {
     }
     <section class="section">
       <div class="section-header">${t('edit.progress')}</div>
-      <div class="list">${cardRows}</div>
+      <div class="list">${progressRow}</div>
     </section>
     <section class="section">
       <div class="list">
@@ -1730,6 +1837,16 @@ function editView(id, from) {
   });
   form.addEventListener('input', queueSave);
   form.addEventListener('change', queueSave);
+  // Only the fields that fit the word class are shown, and never one that already has text:
+  // a plural for nouns, forms for verbs and adjectives.
+  const fitFields = () => {
+    const pos = form.elements.pos.value;
+    $('#pluralRow').hidden = !['', 'noun'].includes(pos) && !form.elements.plural.value;
+    $('#formsRow').hidden = !['', 'verb', 'adj', 'other'].includes(pos) && !form.elements.forms.value;
+    form.elements.forms.placeholder = pos === 'verb' ? t('edit.formsPh') : pos === 'adj' ? t('edit.formsPhAdj') : '';
+  };
+  fitFields();
+  form.elements.pos.addEventListener('change', fitFields);
   $('#speak')?.addEventListener('click', () => speak(displayWord(w)));
   async function save() {
     timer = null;
@@ -1779,7 +1896,15 @@ function editView(id, from) {
     clearTimeout(timer);
     timer = null;
     await S.deleteWord(w);
-    toast(t('edit.deleted'));
+    // as in the word list, a deletion can be taken back for a moment
+    const gone = w;
+    toast(t('edit.deleted'), {
+      action: t('study.undo'),
+      onAction: async () => {
+        await S.updateWords([gone], (x) => (x.deleted = false));
+        if (current === 'words') route();
+      },
+    });
     location.hash = back.href;
   });
   return flush;
@@ -1821,6 +1946,21 @@ function addView() {
       </div>
       <div class="section-footer">${esc(t('add.foot'))}</div>
     </section>
+    <div id="preview"></div>
+    <section class="section" id="tagsSection" hidden>
+      <div class="list">
+        <label class="row field"><span>${t('edit.tags')}</span><input id="tags" placeholder="${esc(t('add.tagsPh'))}" autocomplete="off"></label>
+        ${
+          knownTags.length
+            ? `<div class="row tag-chips">${knownTags.map((tag) => `<button type="button" class="chip" data-tag="${esc(tag)}">${esc(tag)}</button>`).join('')}</div>`
+            : ''
+        }
+      </div>
+      <div class="section-footer">${t('add.tagsFoot')}</div>
+    </section>
+    <section class="section" id="importSection" hidden>
+      <button class="btn" id="import"></button>
+    </section>
     <section class="section">
       <div class="section-header">${t('add.fromFile')}</div>
       <div class="list">
@@ -1836,19 +1976,7 @@ function addView() {
         ${row({ title: t('help.title'), icon: icon('book', 'gray'), href: '#formats' })}
       </div>
       <div class="section-footer">${esc(t('add.fileFoot'))}</div>
-    </section>
-    <section class="section">
-      <div class="list">
-        <label class="row field"><span>${t('edit.tags')}</span><input id="tags" placeholder="${esc(t('add.tagsPh'))}" autocomplete="off"></label>
-        ${
-          knownTags.length
-            ? `<div class="row tag-chips">${knownTags.map((tag) => `<button type="button" class="chip" data-tag="${esc(tag)}">${esc(tag)}</button>`).join('')}</div>`
-            : ''
-        }
-      </div>
-      <div class="section-footer">${t('add.tagsFoot')}</div>
-    </section>
-    <div id="preview"></div>`;
+    </section>`;
 
   const lines = $('#lines');
   const tagsInput = $('#tags');
@@ -1954,11 +2082,14 @@ function addView() {
 
   function renderPreview() {
     const box = $('#preview');
+    const fresh = items.filter((i) => !i.dup);
+    $('#tagsSection').hidden = $('#importSection').hidden = !items.length;
+    $('#import').disabled = !fresh.length;
+    $('#import').textContent = t('add.import', { n: fresh.length });
     if (!items.length) {
       box.innerHTML = '';
       return;
     }
-    const fresh = items.filter((i) => !i.dup);
     const hidden = items.length - PREVIEW_LIMIT;
     box.innerHTML = `
       <section class="section">
@@ -1981,9 +2112,11 @@ function addView() {
                   : `<div class="row-sub">${esc(it.zh)}</div>`;
               }
               const look = !it.dup && !it.zh ? dictLinks(lookupTerm(it), getLang())[0] : null;
+              const lookLink = look
+                ? `<a class="lookup" href="${esc(look.href)}" target="_blank" rel="noopener noreferrer" title="${esc(t('dict.lookup', { name: look.name }))}">${ICON.search}<span>${t('dict.short')}</span></a>`
+                : '';
               return `<div class="row pv ${it.dup ? 'dup' : ''}">
-                <div class="row-main"><div lang="de">${kind}${wordHTML(it)}${pl}${forms}</div>${body}${it.example && !it.dup ? `<div class="row-sub" lang="de">${esc(it.example)}</div>` : ''}</div>
-                ${look ? `<a class="lookup" href="${esc(look.href)}" target="_blank" rel="noopener noreferrer" aria-label="${esc(t('dict.lookup', { name: look.name }))}">${ICON.search}</a>` : ''}
+                <div class="row-main"><div class="pv-head"><div lang="de">${kind}${wordHTML(it)}${pl}${forms}</div>${lookLink}</div>${body}${it.example && !it.dup ? `<div class="row-sub" lang="de">${esc(it.example)}</div>` : ''}</div>
                 <button class="x" data-i="${i}" aria-label="${t('add.remove')}">✕</button>
               </div>`;
             })
@@ -1991,9 +2124,6 @@ function addView() {
           ${hidden > 0 ? `<div class="row"><div class="row-main secondary">${t('add.moreRows', { n: hidden })}</div></div>` : ''}
         </div>
         <div class="section-footer">${esc(t('add.previewFoot'))}</div>
-      </section>
-      <section class="section">
-        <button class="btn" id="import" ${fresh.length ? '' : 'disabled'}>${t('add.import', { n: fresh.length })}</button>
       </section>`;
     // Removing a row removes its line from the text, or drops it from the file.
     $$('.pv .x', box).forEach((b) =>
@@ -2025,8 +2155,8 @@ function addView() {
         nextInput ? nextInput.focus() : inp.blur();
       });
     });
-    $('#import', box).addEventListener('click', doImport);
   }
+  $('#import').addEventListener('click', doImport);
 
   async function doImport() {
     const tags = tagList();
@@ -2190,7 +2320,7 @@ function statsView() {
     ${largeTitle(t('tab.stats'))}
     <div class="tiles">
       ${tile(t('stats.streak'), st.streak, t('unit.d'), 'orange')}
-      ${tile(t('stats.today'), st.todayReviews, t('unit.cards'), 'green')}
+      ${tile(t('stats.today'), st.todayReviews, t('unit.answers'), 'green')}
       ${tile(t('stats.time'), st.todayMinutes, t('unit.min'), 'blue')}
       ${tile(t('stats.words'), st.total, t('unit.words'), 'tint')}
     </div>
@@ -2378,15 +2508,14 @@ function settingsView() {
               .join('')}
           </select>${ICON.chev}
         </label>
-        <label class="row has-icon">${stripesIcon}<div class="row-main">${t('set.askArticle')}</div><input type="checkbox" class="switch" id="askArticle" ${s.askArticle ? 'checked' : ''}></label>
-        <label class="row has-icon">${icon('speaker', 'red')}<div class="row-main">${t('set.autoSpeak')}</div><input type="checkbox" class="switch" id="autoSpeak" ${s.autoSpeak ? 'checked' : ''}></label>
-        <label class="row has-icon">${icon('bell', 'orange')}<div class="row-main">${t('set.sound')}</div><input type="checkbox" class="switch" id="sound" ${s.sound ? 'checked' : ''}></label>
       </div>
       <div class="section-footer">${t('set.reviewFoot')}</div>
     </section>
 
     <section class="section">
       <div class="list">
+        <label class="row has-icon">${icon('speaker', 'red')}<div class="row-main">${t('set.autoSpeak')}</div><input type="checkbox" class="switch" id="autoSpeak" ${s.autoSpeak ? 'checked' : ''}></label>
+        <label class="row has-icon">${icon('bell', 'orange')}<div class="row-main">${t('set.sound')}</div><input type="checkbox" class="switch" id="sound" ${s.sound ? 'checked' : ''}></label>
         <label class="row has-icon field">${icon('globe', 'blue')}<span class="grow">${t('set.language')}</span>
           <select id="lang">
             <option value="auto" ${langPref === 'auto' ? 'selected' : ''}>${t('lang.auto')}</option>
@@ -2415,7 +2544,25 @@ function settingsView() {
       <div class="section-footer">${syncOn ? t('set.syncFoot') : t('set.syncOffFoot')}</div>
     </section>
 
-    ${standalone ? '' : installSectionHTML()}
+    <section class="section">
+      <div class="section-header">${t('set.backup')}</div>
+      <div class="list">
+        <button class="row action has-icon" id="exportJson">${icon('up', 'blue')}<div class="row-main strong">${t('set.exportBackup')}</div></button>
+        <label class="row action has-icon">${icon('down', 'green')}<div class="row-main strong">${t('set.importBackup')}</div><input type="file" id="importJson" accept="application/json,.json" hidden></label>
+      </div>
+      <div class="section-footer">${t('set.backupFoot', { time: relTime(state.lastBackup) })}</div>
+    </section>
+
+    <section class="section">
+      <div class="section-header">${t('set.wordList')}</div>
+      <div class="list">
+        <label class="row action has-icon">${icon('down', 'green')}<div class="row-main strong">${t('set.importList')}</div><input type="file" id="importList" accept=".txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values" hidden></label>
+        <button class="row action has-icon" id="exportCsv">${icon('up', 'blue')}<div class="row-main strong">${t('set.exportCsv')}</div></button>
+        <button class="row action has-icon" id="template">${icon('doc', 'gray')}<div class="row-main strong">${t('add.template')}</div></button>
+        ${row({ title: t('help.title'), icon: icon('book', 'gray'), href: '#formats' })}
+      </div>
+      <div class="section-footer">${t('set.wordListFoot')}</div>
+    </section>
 
     <section class="section">
       <div class="section-header">${t('storage.title')}</div>
@@ -2431,24 +2578,8 @@ function settingsView() {
       <div class="section-footer" id="stFoot">${t('storage.foot', { keep: S.LOG_DAYS })}</div>
     </section>
 
-    <section class="section">
-      <div class="section-header">${t('set.wordList')}</div>
-      <div class="list">
-        <label class="row action has-icon">${icon('down', 'green')}<div class="row-main strong">${t('set.importList')}</div><input type="file" id="importList" accept=".txt,.csv,.tsv,text/plain,text/csv,text/tab-separated-values" hidden></label>
-        <button class="row action has-icon" id="exportCsv">${icon('up', 'blue')}<div class="row-main strong">${t('set.exportCsv')}</div></button>
-        <button class="row action has-icon" id="template">${icon('doc', 'gray')}<div class="row-main strong">${t('add.template')}</div></button>
-        ${row({ title: t('help.title'), icon: icon('book', 'gray'), href: '#formats' })}
-      </div>
-      <div class="section-footer">${t('set.wordListFoot')}</div>
-    </section>
-    <section class="section">
-      <div class="section-header">${t('set.backup')}</div>
-      <div class="list">
-        <button class="row action has-icon" id="exportJson">${icon('up', 'blue')}<div class="row-main strong">${t('set.exportBackup')}</div></button>
-        <label class="row action has-icon">${icon('down', 'green')}<div class="row-main strong">${t('set.importBackup')}</div><input type="file" id="importJson" accept="application/json,.json" hidden></label>
-      </div>
-      <div class="section-footer">${t('set.backupFoot', { time: relTime(state.lastBackup) })}</div>
-    </section>
+    ${standalone ? '' : installSectionHTML()}
+
     <section class="section">
       <div class="list"><button class="row destructive center" id="wipe">${t(sync.token ? 'set.wipeAll' : 'set.wipe')}</button></div>
       <div class="section-footer center">${t('set.shortcuts')}</div>
@@ -2503,7 +2634,6 @@ function settingsView() {
   });
   $('#retention').addEventListener('change', (e) => S.saveSettings({ retention: +e.target.value }));
   $('#autoSpeak').addEventListener('change', (e) => S.saveSettings({ autoSpeak: e.target.checked }));
-  $('#askArticle').addEventListener('change', (e) => S.saveSettings({ askArticle: e.target.checked }));
   $('#sound').addEventListener('change', (e) => {
     S.saveSettings({ sound: e.target.checked });
     if (e.target.checked) play('right');

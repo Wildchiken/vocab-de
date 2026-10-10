@@ -320,6 +320,7 @@ a.row:active, button.row:active { background: var(--cell-hi); }
   background: #1c1c1e; gap: 2px; padding: 6px 5px; display: flex; flex-direction: column; justify-content: center; align-items: stretch;
 }
 .ic.stripes i { display: block; height: 4px; border-radius: 2px; }
+@media (prefers-color-scheme: dark) { .ic.stripes { background: #3a3a3c; } }
 
 .field { display: flex; align-items: center; gap: 12px; }
 .field > span:not(.ic) { width: 5.5em; flex: none; }
@@ -600,17 +601,20 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
 .bar-n { position: absolute; top: -18px; font-size: 0.65rem; color: var(--label-2); font-variant-numeric: tabular-nums; }
 .bar-l { font-size: 0.6rem; color: var(--label-2); margin-top: 5px; white-space: nowrap; }
 
+/* Centered between insets rather than with left: 50%, which let a long message use only half the
+   screen and wrapped it into a narrow column. */
 #toast {
-  position: fixed; left: 50%; top: calc(env(safe-area-inset-top) + 10px); z-index: 30;
-  transform: translate(calc(-50% + var(--side-w) / 2), -16px) scale(0.9); opacity: 0; pointer-events: none;
+  position: fixed; left: calc(var(--side-w) + 16px); right: 16px; top: calc(env(safe-area-inset-top) + 10px); z-index: 30;
+  width: fit-content; max-width: 560px; margin: 0 auto; text-align: center; line-height: 1.35;
+  transform: translateY(-16px) scale(0.9); opacity: 0; pointer-events: none;
   transition: opacity 0.25s var(--ease), transform 0.4s var(--spring);
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.22), transparent 45%), var(--glass-strong);
   -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
   box-shadow: inset 0 1px 0 var(--glass-rim), 0 0 0 0.5px var(--glass-edge), var(--glass-shadow);
   color: var(--label); font-size: 0.88rem; font-weight: 600;
-  padding: 12px 20px; border-radius: 24px; max-width: calc(100vw - 32px);
+  padding: 12px 20px; border-radius: 24px;
 }
-#toast.show { opacity: 1; transform: translate(calc(-50% + var(--side-w) / 2), 0) scale(1); }
+#toast.show { opacity: 1; transform: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -630,7 +634,9 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
 #newAnyway { margin: 10px auto 4px; display: flex; }
 .summary .backlog + .btn, .summary #newAnyway + .btn { margin-top: 14px; }
 
-#toast.has-action { pointer-events: auto; display: flex; align-items: center; gap: 14px; padding-right: 8px; }
+#toast.has-action { display: flex; align-items: center; gap: 14px; padding-right: 8px; }
+/* Only a visible toast takes taps: a faded one would still sit over the nav bar's buttons. */
+#toast.has-action.show { pointer-events: auto; }
 #toast button {
   border: none; background: var(--tint-fill); color: var(--tint); font: inherit; font-weight: 600;
   padding: 6px 12px; border-radius: 14px; cursor: pointer;
@@ -649,6 +655,16 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
 }
 .nav-pill:active { transform: scale(0.92); }
 
+/* Word list header: the count, and practice for what the filters show */
+.list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+.head-btn {
+  flex: none; display: inline-flex; align-items: center; gap: 4px; border: none; cursor: pointer;
+  padding: 5px 12px 5px 9px; border-radius: 15px; background: var(--tint-fill); color: var(--tint);
+  font-size: 0.8rem; font-weight: 600;
+}
+.head-btn svg { width: 15px; height: 15px; }
+.head-btn:active { transform: scale(0.96); }
+
 /* Selection mode in the word list */
 .row.pick { cursor: pointer; }
 .check {
@@ -662,18 +678,22 @@ body.selecting .tabbar { display: none; }
 .select-bar {
   position: fixed; z-index: 25; left: 50%; transform: translateX(calc(-50% + var(--side-w) / 2));
   bottom: calc(env(safe-area-inset-bottom) + 10px); width: min(calc(100vw - 32px), 480px);
-  height: 62px; border-radius: 31px; padding: 0 8px 0 18px; display: flex; align-items: center; gap: 4px;
+  height: 62px; border-radius: 31px; padding: 0 6px 0 18px; display: flex; align-items: center; gap: 2px;
 }
-.sel-text { border: none; background: none; color: var(--tint); font-size: 1rem; font-weight: 600; cursor: pointer; padding: 8px 4px; }
-.sel-count { flex: 1; text-align: center; font-size: 0.88rem; color: var(--label-2); font-variant-numeric: tabular-nums; }
-.sel-icon {
-  width: 46px; height: 46px; border: none; border-radius: 23px; background: none; color: var(--tint);
-  display: grid; place-items: center; cursor: pointer;
+.sel-info { flex: none; min-width: 4.6em; margin-right: 4px; display: flex; flex-direction: column; align-items: flex-start; }
+.sel-text { border: none; background: none; color: var(--tint); font-size: 0.95rem; font-weight: 600; cursor: pointer; padding: 2px 0; }
+.sel-count { font-size: 0.72rem; color: var(--label-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Each action says what it does: an icon alone left people guessing. */
+.sel-act {
+  flex: 1; min-width: 0; height: 52px; padding: 0 2px; border: none; border-radius: 22px; background: none; color: var(--tint);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; cursor: pointer;
+  font-size: 11px; font-weight: 600;
 }
-.sel-icon svg { width: 24px; height: 24px; }
-.sel-icon.danger { color: var(--red); }
-.sel-icon:disabled { color: var(--label-3); cursor: default; }
-.sel-icon:not(:disabled):active { background: var(--fill); }
+.sel-act svg { width: 22px; height: 22px; }
+.sel-act span { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sel-act.danger { color: var(--red); }
+.sel-act:disabled { color: var(--label-3); cursor: default; }
+.sel-act:not(:disabled):active { background: var(--fill); }
 
 .say-example {
   border: none; background: none; color: inherit; font: inherit; text-align: center; cursor: pointer; padding: 0;
@@ -708,6 +728,22 @@ body.selecting .tabbar { display: none; }
 .dialog-buttons button:active { transform: scale(0.96); }
 .dialog-buttons .primary { background: var(--tint); color: #fff; }
 .dialog-buttons .destructive { background: var(--red); color: #fff; }
+.dialog-buttons.one { grid-template-columns: 1fr; }
+/* A dialog that is a list to pick from, e.g. the mode of a practice round */
+.dialog.picker { width: min(380px, 100%); max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); overflow-y: auto; }
+.dialog .dialog-sub { margin: -10px 4px 14px; font-size: 0.82rem; line-height: 1.35; color: var(--label-2); }
+.dialog-options { display: grid; gap: 6px; margin-bottom: 12px; text-align: left; }
+.dialog-options button {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 7px 14px;
+  border: none; border-radius: 18px; background: var(--fill); color: var(--label); text-align: left; cursor: pointer;
+  transition: transform 0.2s var(--spring);
+}
+.dialog-options button:active { transform: scale(0.98); }
+.dialog-options button.on { background: var(--tint-fill); box-shadow: inset 0 0 0 1.5px var(--tint); }
+.dialog-options button:disabled { opacity: 0.45; cursor: default; transform: none; }
+.opt-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.opt-main b { font-size: 0.97rem; }
+.opt-main span { font-size: 0.78rem; color: var(--label-2); }
 
 .home-actions { display: flex; flex-direction: column; gap: 10px; }
 
@@ -759,11 +795,13 @@ body.dropping #app::after {
 .finish-list .section-header { padding-left: 4px; }
 
 /* Add screen: dictionary shortcut */
+.pv-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .pv .lookup {
-  flex: none; width: 26px; height: 26px; margin: 2px 8px 0 0; border-radius: 13px;
+  flex: none; height: 26px; margin-top: -1px; padding: 0 10px 0 8px; border-radius: 13px; gap: 3px;
   display: inline-flex; align-items: center; justify-content: center; background: var(--tint-fill); color: var(--tint);
+  font-size: 0.78rem; font-weight: 600; white-space: nowrap;
 }
-.pv .lookup svg { width: 14px; height: 14px; }
+.pv .lookup svg { width: 13px; height: 13px; }
 
 /* Word list progress */
 .list-progress { width: 100%; text-align: left; }

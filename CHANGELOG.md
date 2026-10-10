@@ -4,12 +4,23 @@
 
 - Study modes on the home screen: Recognize (default), Recall, Choice, Listen, Spell and Article. All of them ask about the same word and update the same schedule. Spelling is no longer a separate card that appears in the day's reviews, and "Pick the article first" is now the option "Ask the article of nouns when recognizing", off by default.
 - Free practice uses the same modes and has an entry on the home screen; it replaces the article drill.
+- Free practice asks how to practice each time it starts (from the home screen, a selection in the word list, or the words missed in a round) and remembers that apart from the study mode. The mode applies to words not studied yet too, Article practice takes only the nouns, and a finished round can be gone over again another way. Practice still leaves the schedule alone.
+- The actions of the word list's selection bar have labels, and the dictionary shortcut on the Add screen says what it does.
+- Settings: Backup, Word list and Storage sit together, and the sound switches share a group with the language.
+- "Ask the article of nouns first" moved from Settings to the home screen, under the study mode it belongs to; it shows when that mode is Recognize. Free practice has its own row there.
+- The word list can practice whatever a tag, status or search shows (Practice these), and the tags of a selection can be removed as well as added, with Undo. The selection stays after changing tags.
+- The study screen shows the words left today ("12 left"), the same number as the home screen, instead of a count of answers. A round that stops with words due again in a minute offers to go on with them right away.
+- Answers are counted as answers ("26 answers today"), not as cards, on the home screen and in Stats.
+- The Add screen shows the preview, the tags and the Import button right under the pasted text; reading a file comes after them.
+- A word's page says where it stands in plain words (status, reviews, times forgotten, next review), shows the plural only for nouns and the forms only for verbs and adjectives unless they are filled in, and deleting the word there can be undone.
+- Messages are no longer squeezed into a narrow column, and a message with an Undo button no longer blocks the buttons under it after it fades.
 
 - Individual review entries are kept for 90 days; older ones become one summary per day, so storage and first sync on a new device no longer grow with the years. The streak and totals are kept. On the server entries are kept for 120 days.
-- Settings → Storage and sync: what is stored here and in the cloud, whether the browser keeps the data, and a Tidy up now button.
+- Settings → Storage: what is stored here and in the cloud, whether the browser keeps the data, and a Tidy up now button.
 - The Node server compresses text files and answers repeat requests with 304.
 - A page left open polls less often while nothing changes.
-- Records are a little smaller: rounded card numbers, no empty card for words not studied yet.
+- Records are a little smaller: rounded card numbers, no empty card for words not studied yet, and 12-character ids for new review entries.
+- Backups leave out deleted words and fields that are still empty, store the review history as short rows grouped by word, and put one record on each line. With 2,000 words and five months of reviews that is 1.4 MB instead of 2.2 MB. Backups from earlier versions still import.
 
 ## 1.1.0
 

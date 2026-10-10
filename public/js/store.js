@@ -47,6 +47,19 @@ const emit = () => listeners.forEach((fn) => fn());
 const uid = () =>
   crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
 
+// A review log only has to be unique within its library: 12 random characters (about 62 bits)
+// are plenty, and every stored, synced and exported log is 24 characters shorter than with a UUID.
+const ID_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789';
+function logId() {
+  let out = '';
+  while (out.length < 12) {
+    for (const b of crypto.getRandomValues(new Uint8Array(16))) {
+      if (b < 252 && out.length < 12) out += ID_CHARS[b % 36];
+    }
+  }
+  return out;
+}
+
 export async function load() {
   const [words, logs, settings, extraNew, lastBackup, days] = await Promise.all([
     idb.all('words'),
@@ -319,7 +332,7 @@ export async function answer(w, type, rating, elapsedMs, now = Date.now(), artic
   const same = rechecking(prev, now);
   w.cards = { ...w.cards, [type]: same ? recheck(prev, rating, now) : schedule(prev, rating, now, params()) };
   const log = {
-    id: uid(),
+    id: logId(),
     w: w.id,
     t: type,
     g: rating,
@@ -616,16 +629,68 @@ export function storageInfo() {
   };
 }
 
+// What a word holds until it is filled in or studied (see makeWord). A backup leaves out the
+// fields that still hold these, and importing puts them back.
+const BLANK = { article: '', plural: '', pos: '', forms: '', zh: '', example: '', exampleZh: '', notes: '', tags: [], suspended: false, deleted: false, cards: {} };
+const isBlank = (k, v) => k in BLANK && JSON.stringify(v) === JSON.stringify(BLANK[k]);
+
+// In a backup the review logs of each word are rows of these fields, trailing empty ones cut
+// off; `t` is only written for the article and spelling cards of earlier versions.
+const LOG_FIELDS = ['id', 'ts', 'g', 'ms', 'st', 'm', 'a', 't'];
+
+/**
+ * A backup: the words and their progress, the review history and the settings. Deleted words
+ * are left out; this device and the sync server keep them only so that the deletion reaches
+ * every device.
+ */
 export function exportData() {
+  const logs = {};
+  for (const { synced, w, ...l } of state.logs) {
+    if (l.t === 'meaning') delete l.t;
+    const row = LOG_FIELDS.map((k) => l[k] ?? null);
+    while (row.at(-1) === null) row.pop();
+    (logs[w] ??= []).push(row);
+  }
   return {
     app: 'vocab-de',
-    version: 1,
+    version: 2,
     exportedAt: new Date().toISOString(),
     settings: state.settings,
-    words: [...state.words.values()].map(({ dirty, ...w }) => w),
-    logs: state.logs.map(({ synced, ...l }) => l),
+    words: liveWords()
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map(({ dirty, ...w }) => Object.fromEntries(Object.entries(w).filter(([k, v]) => !isBlank(k, v)))),
+    logFields: LOG_FIELDS,
+    logs,
     days: [...state.days.values()].map(({ dirty, ...d }) => d),
   };
+}
+
+/** The backup file: plain JSON with one record per line, so it is easy to read and compare. */
+export function backupText(data = exportData()) {
+  const lines = (v) =>
+    Array.isArray(v)
+      ? `[${v.map((x) => `\n${JSON.stringify(x)}`).join(',')}\n]`
+      : `{${Object.entries(v)
+          .map(([k, x]) => `\n${JSON.stringify(k)}:${JSON.stringify(x)}`)
+          .join(',')}\n}`;
+  const { words, logs, days, ...head } = data;
+  return `${JSON.stringify(head).slice(0, -1)},\n"words":${lines(words)},\n"logs":${lines(logs)},\n"days":${lines(days)}}\n`;
+}
+
+// Review logs as a backup holds them: rows grouped by word (version 2) or objects (version 1).
+function backupLogs(data) {
+  if (Array.isArray(data.logs)) return data.logs;
+  const fields = Array.isArray(data.logFields) ? data.logFields : LOG_FIELDS;
+  const out = [];
+  for (const [w, rows] of Object.entries(data.logs && typeof data.logs === 'object' ? data.logs : {})) {
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!Array.isArray(row)) continue;
+      const l = { w, t: 'meaning' };
+      fields.forEach((k, i) => row[i] != null && (l[k] = row[i]));
+      out.push(l);
+    }
+  }
+  return out;
 }
 
 function isWordRecord(w) {
@@ -642,7 +707,8 @@ function isWordRecord(w) {
 export async function importData(data) {
   if (data?.app !== 'vocab-de') throw Object.assign(new Error('not a vocab-de backup'), { code: 'notBackup' });
   const words = [];
-  for (const w of Array.isArray(data.words) ? data.words : []) {
+  for (const raw of Array.isArray(data.words) ? data.words : []) {
+    const w = raw && typeof raw === 'object' ? { ...BLANK, tags: [], cards: {}, ...raw } : raw;
     if (!isWordRecord(w)) continue;
     const next = reconcile(state.words.get(w.id), w);
     if (next) words.push({ ...next, dirty: true });
@@ -656,7 +722,7 @@ export async function importData(data) {
     settings = true;
   }
   const known = new Set(state.logs.map((l) => l.id));
-  const logs = (Array.isArray(data.logs) ? data.logs : [])
+  const logs = backupLogs(data)
     .filter((l) => typeof l?.id === 'string' && Number.isFinite(l.ts) && !known.has(l.id))
     .map((l) => ({ ...l, synced: false }));
   await addWords(words);

@@ -40,6 +40,10 @@ async function run(name, engine) {
     await page.locator('#trySample').tap();
     await page.waitForSelector('.summary-num');
     for (const n of await page.locator('.summary-num').allTextContents()) assert.match(n, /^\d+$/, `home number "${n}"`);
+    // The article option sits next to the study mode it belongs to
+    await page.locator('#askArticle').check();
+    assert.equal(await page.evaluate(async () => (await import('/js/store.js')).state.settings.askArticle), true);
+    await page.locator('#askArticle').uncheck();
 
     // Every screen renders
     for (const hash of ['words', 'add', 'formats', 'stats', 'settings']) {
@@ -52,6 +56,7 @@ async function run(name, engine) {
     await page.evaluate(() => (location.hash = '#study'));
     await page.locator('#reveal').waitFor();
     assert.match(await page.locator('#wordBig').innerText(), /^der Tisch$/);
+    assert.equal(await page.locator('.progress-text').innerText(), '20 left', 'the words left today, as on the home screen');
     await page.locator('#reveal').dblclick();
     await page.locator('.rate').waitFor();
     assert.equal(await logCount(page), 0, 'double-tap on "show answer" rated the card');
@@ -164,6 +169,8 @@ async function run(name, engine) {
     await page.evaluate(() => (location.hash = '#home'));
     const cardsBefore = await page.evaluate(async () => JSON.stringify((await import('/js/store.js')).liveWords().map((w) => w.cards)));
     await page.locator('#freePractice').tap();
+    // a practice round starts with picking how its words are asked
+    await page.locator('.dialog-options button').first().tap();
     await page.locator('#reveal').waitFor();
     await page.waitForTimeout(450);
     await page.locator('#reveal').tap();
@@ -171,14 +178,42 @@ async function run(name, engine) {
     await page.locator('#gotIt').tap();
     assert.equal(await page.evaluate(async () => JSON.stringify((await import('/js/store.js')).liveWords().map((w) => w.cards))), cardsBefore);
 
-    // Practice from the word list: revealing and rating right away are different buttons, so both count
+    // Practice from the word list, in the mode picked for it (recall); revealing and rating right
+    // away are different buttons, so both count
     await page.evaluate(() => (location.hash = '#words'));
     await page.locator('#selectBtn').tap();
     await page.locator('#list .pick').first().tap();
+    assert.equal(await page.locator('#selPractice').innerText(), 'Practice', 'the actions say what they do');
     await page.locator('#selPractice').tap();
+    await page.locator('.dialog-options button').nth(1).tap();
+    await page.locator('.big-zh').waitFor();
     await page.locator('#reveal').tap();
     await page.locator('#gotIt').tap();
     await page.locator('#again').waitFor();
+    // the same words once more, another way
+    await page.locator('#otherMode').tap();
+    await page.locator('.dialog-options button').nth(4).tap();
+    await page.locator('#spellIn').waitFor();
+
+    // What a tag filter shows can be practiced in one go, and a tag comes off a selection as
+    // easily as it goes on (and back with Undo)
+    await page.evaluate(() => (location.hash = '#words'));
+    await page.locator('#fTag').selectOption({ index: 1 });
+    const tag = await page.locator('#fTag').inputValue();
+    await page.locator('#practiceList').tap();
+    await page.locator('.dialog-options button').first().tap();
+    await page.locator('#reveal').waitFor();
+    await page.evaluate(() => (location.hash = '#words'));
+    await page.locator('#selectBtn').tap();
+    await page.locator('#selAll').tap();
+    await page.locator('#selTag').tap();
+    await page.locator('.dialog-options button', { hasText: tag }).tap();
+    const tagged = () => page.evaluate(async (x) => (await import('/js/store.js')).liveWords().filter((w) => w.tags.includes(x)).length, tag);
+    assert.equal(await tagged(), 0);
+    assert.ok(await page.locator('body.selecting').count(), 'the selection stays after changing tags');
+    await page.locator('#toast button').tap();
+    await page.waitForFunction(async (x) => (await import('/js/store.js')).liveWords().some((w) => w.tags.includes(x)), tag);
+    await page.locator('#selectBtn').tap();
 
     // Import a file
     await page.evaluate(() => (location.hash = '#add'));
