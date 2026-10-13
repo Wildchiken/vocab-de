@@ -58,7 +58,9 @@ const COLUMNS = {
   zh: ['meaning', 'translation', 'back', 'definition', 'zh', 'chinese', 'english', 'bedeutung', '释义', '中文', '意思', '翻译'],
   example: ['example', 'beispiel', 'sentence', '例句'],
   exampleZh: ['example_translation', 'example translation', '例句翻译'],
+  notes: ['notes', 'note', 'notiz', 'notizen', '笔记', '备注', '注释'],
   tags: ['tags', 'tag', '标签'],
+  status: ['status', '状态'],
 };
 // The plural column may hold the full form, a dictionary marker (-e, ¨-er, -) or, as in this
 // app's export, a dash for "no plural".
@@ -68,7 +70,26 @@ function plural(lemma, raw) {
   return pluralFromSpec(lemma, raw);
 }
 
-const POS = ['noun', 'verb', 'adj', 'adv', 'prep', 'conj', 'phrase', 'sentence', 'other'];
+// Word classes as people write them in a spreadsheet: this app's codes, or the name in
+// English, German or Chinese.
+const POS_NAMES = {
+  noun: ['noun', 'n', 'nomen', 'substantiv', '名词', '名'],
+  verb: ['verb', 'v', 'vt', 'vi', '动词', '动'],
+  adj: ['adj', 'adjective', 'adjektiv', '形容词', '形'],
+  adv: ['adv', 'adverb', '副词', '副'],
+  prep: ['prep', 'preposition', 'präposition', 'praeposition', '介词', '介'],
+  conj: ['conj', 'conjunction', 'konjunktion', '连词', '连'],
+  phrase: ['phrase', 'redewendung', 'ausdruck', '短语', '词组'],
+  sentence: ['sentence', 'satz', '句子'],
+  other: ['other', 'andere', '其他'],
+};
+export const posFromName = (name) => {
+  const key = String(name || '').trim().toLowerCase().replace(/\.$/, '');
+  return Object.keys(POS_NAMES).find((pos) => POS_NAMES[pos].includes(key)) || '';
+};
+// A status column (this app's export has one) can only put a word on hold; anything else is
+// the progress the app keeps by itself.
+const SUSPENDED = ['suspended', 'paused', '已暂停', '暂停'];
 
 function headerMap(row) {
   const map = {};
@@ -98,7 +119,7 @@ function fromColumns(row, map) {
   // The German column may itself be "der Tisch, -e"; let the line parser read it.
   const parsed = parseLine(`${lemma}\t${get('zh') || '-'}`) || {};
   const article = get('article').toLowerCase();
-  const pos = get('pos').toLowerCase();
+  const pos = posFromName(get('pos'));
   const word = parsed.lemma || lemma;
   return {
     ...parsed,
@@ -106,20 +127,46 @@ function fromColumns(row, map) {
     lemma: word,
     article: ARTICLES.includes(article) ? article : parsed.article || '',
     plural: plural(word, get('plural')) || parsed.plural || '',
-    pos: POS.includes(pos) ? pos : parsed.pos || '',
+    pos: pos || parsed.pos || '',
     forms: get('forms') || parsed.forms || '',
     zh: get('zh'),
     example: get('example') || parsed.example || '',
     exampleZh: get('exampleZh'),
+    notes: get('notes'),
     tags: get('tags')
       .split(/[;,，]/)
       .map((t) => t.trim())
       .filter(Boolean),
+    ...(SUSPENDED.includes(get('status').toLowerCase()) ? { suspended: true } : {}),
   };
 }
 
+// The fields an imported row can bring to a word that is already in the library.
+export const UPDATE_FIELDS = ['article', 'plural', 'pos', 'forms', 'zh', 'example', 'exampleZh', 'notes'];
+
+/**
+ * What a row of a list changes in a word already in the library, as a patch. 'fill' only fills
+ * fields that are empty there; 'replace' also replaces those the file has differently. Either
+ * way the row's tags are added, and nothing is ever erased: an empty cell leaves the word as
+ * it is. 'skip' changes nothing.
+ */
+export function updateFor(word, item, mode, extraTags = []) {
+  const patch = {};
+  if (mode !== 'fill' && mode !== 'replace') return patch;
+  for (const k of UPDATE_FIELDS) {
+    const v = String(item[k] ?? '').trim();
+    if (!v || v === (word[k] || '')) continue;
+    if (mode === 'replace' || !word[k]) patch[k] = v;
+  }
+  const have = word.tags || [];
+  const add = [...new Set([...(item.tags || []), ...extraTags])].filter((t) => !have.includes(t));
+  if (add.length) patch.tags = [...have, ...add];
+  if (item.suspended && !word.suspended) patch.suspended = true;
+  return patch;
+}
+
 // Template in the same columns as the CSV export, so both directions share one format.
-export const TEMPLATE_HEADER = ['article', 'lemma', 'plural', 'pos', 'forms', 'meaning', 'example', 'example_translation', 'tags'];
+export const TEMPLATE_HEADER = ['article', 'lemma', 'plural', 'pos', 'forms', 'meaning', 'example', 'example_translation', 'notes', 'tags'];
 
 export function toCSV(rows) {
   const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;

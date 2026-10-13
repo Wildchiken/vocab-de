@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCSV, itemsFromText, decodeText, toCSV, TEMPLATE_HEADER } from '../public/js/importer.js';
+import { parseCSV, itemsFromText, decodeText, toCSV, TEMPLATE_HEADER, updateFor, posFromName } from '../public/js/importer.js';
 
 test('CSV with quotes, escaped quotes and embedded newlines', () => {
   const rows = parseCSV('a,b\n"der Tisch, -e","say ""hi""\nthere"\r\nx,y');
@@ -70,11 +70,41 @@ test('plural column: markers are expanded and a dash means no plural', () => {
 });
 
 test('the template imports cleanly', () => {
-  const rows = [TEMPLATE_HEADER, ['die', 'Stadt', '¨-e', 'noun', '', '城市', '', '', '第1课;A1'], ['', 'Wie geht es dir?', '', 'sentence', '', '你好吗？', '', '', '第1课']];
+  const rows = [TEMPLATE_HEADER, ['die', 'Stadt', '¨-e', 'noun', '', '城市', '', '', 'die Hauptstadt 首都', '第1课;A1'], ['', 'Wie geht es dir?', '', 'sentence', '', '你好吗？', '', '', '', '第1课']];
   const { items, format } = itemsFromText(decodeText(new TextEncoder().encode(toCSV(rows))), 'template.csv');
   assert.equal(format, 'table');
-  assert.deepEqual(items.map((i) => [i.article, i.lemma, i.plural, i.pos, i.tags]), [
-    ['die', 'Stadt', 'Städte', 'noun', ['第1课', 'A1']],
-    ['', 'Wie geht es dir?', '', 'sentence', ['第1课']],
+  assert.deepEqual(items.map((i) => [i.article, i.lemma, i.plural, i.pos, i.notes, i.tags]), [
+    ['die', 'Stadt', 'Städte', 'noun', 'die Hauptstadt 首都', ['第1课', 'A1']],
+    ['', 'Wie geht es dir?', '', 'sentence', '', ['第1课']],
   ]);
+});
+
+test('notes, a suspended status and word classes written out are read from a table', () => {
+  const csv = '德语,释义,词性,笔记,状态\nTisch,桌子,名词,Esstisch 餐桌,已暂停\nlaufen,跑,Verb,,new\nschnell,快,adj.,,\nob,是否,连词,,';
+  const { items, columns } = itemsFromText(csv, 'liste.csv');
+  assert.deepEqual(columns, ['lemma', 'pos', 'zh', 'notes', 'status']);
+  assert.deepEqual(
+    items.map((i) => [i.lemma, i.pos, i.notes, Boolean(i.suspended)]),
+    [
+      ['Tisch', 'noun', 'Esstisch 餐桌', true],
+      ['laufen', 'verb', '', false],
+      ['schnell', 'adj', '', false],
+      ['ob', 'conj', '', false],
+    ],
+  );
+  assert.equal(posFromName('Substantiv'), 'noun');
+  assert.equal(posFromName('irgendwas'), '');
+});
+
+test('a list row fills in or updates a word already in the library, and never erases', () => {
+  const word = { lemma: 'Tisch', article: 'der', plural: 'Tische', pos: 'noun', zh: '桌子', example: '', notes: 'mine', tags: ['A1'], suspended: false };
+  const row = { lemma: 'Tisch', article: 'der', plural: '', zh: '桌子；台子', example: 'Der Tisch ist neu.', notes: '', tags: ['Lektion 3'] };
+  assert.deepEqual(updateFor(word, row, 'skip'), {});
+  // only what is empty, and the tags of the row and of the batch
+  assert.deepEqual(updateFor(word, row, 'fill', ['B1']), { example: 'Der Tisch ist neu.', tags: ['A1', 'Lektion 3', 'B1'] });
+  // what the file has replaces; its empty cells leave the plural and the notes alone
+  assert.deepEqual(updateFor(word, row, 'replace'), { zh: '桌子；台子', example: 'Der Tisch ist neu.', tags: ['A1', 'Lektion 3'] });
+  // nothing new: no change at all
+  assert.deepEqual(updateFor(word, { ...word, tags: ['A1'] }, 'replace'), {});
+  assert.deepEqual(updateFor(word, { suspended: true }, 'fill'), { suspended: true });
 });

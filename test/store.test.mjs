@@ -1,6 +1,6 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { state, getCard, acceptDay, dayKey, stats, makeWord, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, tagProgress, practicePool, DEFAULT_SETTINGS } from '../public/js/store.js';
+import { state, getCard, acceptDay, dayKey, stats, makeWord, findDuplicate, pickNext, todayCounts, eligible, reconcile, mergeWord, estimateMinutes, tagProgress, practicePool, DEFAULT_SETTINGS } from '../public/js/store.js';
 import { MIN, DAY, dayStart, newCard } from '../public/js/fsrs.js';
 
 const now = new Date('2026-09-27T10:00:00').getTime();
@@ -254,4 +254,12 @@ test('free practice draws learned words, more often the ones that were forgotten
   assert.ok(hits > 400 * 0.5, `hits ${hits}`);
   // filters: only nouns with a given tag, say
   assert.deepEqual(practicePool(50, (w) => w.lemma === 'Schwer'), [hard]);
+});
+
+test('a line without an article finds the noun already there; with another article it is another word', () => {
+  setWords([noun('See', 'der', 1), makeWord({ lemma: 'gehen', pos: 'verb', zh: 'go' })]);
+  assert.equal(findDuplicate('See', '')?.article, 'der');
+  assert.equal(findDuplicate('see', 'der')?.article, 'der');
+  assert.equal(findDuplicate('See', 'die'), null);
+  assert.equal(findDuplicate('Gehen', '')?.lemma, 'gehen');
 });

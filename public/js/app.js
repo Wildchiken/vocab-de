@@ -15,7 +15,7 @@ import {
 import { dayStart, DAY, rechecking } from './fsrs.js';
 import { t, fmtIvl, locale, detectLang, setLang, getLang, LANGS } from './i18n.js';
 import { sampleWords } from './sample.js';
-import { itemsFromFile, toCSV, TEMPLATE_HEADER } from './importer.js';
+import { itemsFromFile, toCSV, TEMPLATE_HEADER, updateFor } from './importer.js';
 import { speak, ttsAvailable } from './tts.js';
 import { play } from './sfx.js';
 import { dictLinks, lookupTerm } from './dict.js';
@@ -199,7 +199,7 @@ const stamp = () => new Date().toISOString().slice(0, 10);
 function exportWordList() {
   const rows = [[...TEMPLATE_HEADER, 'status']];
   for (const w of S.liveWords()) {
-    rows.push([w.article, w.lemma, w.plural, w.pos, w.forms, w.zh, w.example, w.exampleZh, (w.tags || []).join(';'), S.wordStatus(w)]);
+    rows.push([w.article, w.lemma, w.plural, w.pos, w.forms, w.zh, w.example, w.exampleZh, w.notes, (w.tags || []).join(';'), S.wordStatus(w)]);
   }
   download(`vocab-de-${stamp()}.csv`, toCSV(rows), 'text/csv');
 }
@@ -210,12 +210,12 @@ function downloadTemplate() {
   const lesson = en ? 'Lesson 1' : '第1课';
   const rows = [
     TEMPLATE_HEADER,
-    ['der', 'Tisch', 'Tische', 'noun', '', en ? 'table' : '桌子', 'Der Tisch ist neu.', en ? 'The table is new.' : '这张桌子是新的。', lesson],
-    ['die', 'Stadt', '¨-e', 'noun', '', en ? 'city' : '城市', '', '', lesson],
-    ['das', 'Wasser', '—', 'noun', '', en ? 'water' : '水', '', '', lesson],
-    ['', 'gehen', '', 'verb', 'ging, ist gegangen', en ? 'to go' : '走；去', 'Ich gehe nach Hause.', en ? 'I am going home.' : '我回家。', lesson],
-    ['', 'auf jeden Fall', '', 'phrase', '', en ? 'in any case' : '无论如何', '', '', lesson],
-    ['', 'Wie geht es dir?', '', 'sentence', '', en ? 'How are you?' : '你好吗？', '', '', lesson],
+    ['der', 'Tisch', 'Tische', 'noun', '', en ? 'table' : '桌子', 'Der Tisch ist neu.', en ? 'The table is new.' : '这张桌子是新的。', '', lesson],
+    ['die', 'Stadt', '¨-e', 'noun', '', en ? 'city' : '城市', '', '', en ? 'die Hauptstadt: the capital' : 'die Hauptstadt 首都', lesson],
+    ['das', 'Wasser', '—', 'noun', '', en ? 'water' : '水', '', '', '', lesson],
+    ['', 'gehen', '', 'verb', 'ging, ist gegangen', en ? 'to go' : '走；去', 'Ich gehe nach Hause.', en ? 'I am going home.' : '我回家。', en ? 'perfect with sein' : '完成时用 sein', lesson],
+    ['', 'auf jeden Fall', '', 'phrase', '', en ? 'in any case' : '无论如何', '', '', '', lesson],
+    ['', 'Wie geht es dir?', '', 'sentence', '', en ? 'How are you?' : '你好吗？', '', '', '', lesson],
   ];
   download(en ? 'vocab-de-template.csv' : 'vocab-de-模板.csv', toCSV(rows), 'text/csv');
 }
@@ -1921,7 +1921,10 @@ const COLUMN_LABEL = {
   forms: 'edit.forms',
   example: 'edit.example',
   exampleZh: 'edit.exampleTr',
+  notes: 'edit.notes',
   tags: 'edit.tags',
+  status: 'add.col.status',
+  suspended: 'add.col.suspended',
 };
 const columnName = (field) => t(COLUMN_LABEL[field]);
 
@@ -1935,6 +1938,9 @@ function addView() {
   let file = null;
   const removed = new Set();
   const knownTags = S.allTags().slice(0, 12);
+  // What happens to words already in the library: skip them, fill in what they lack, or take
+  // what the file has. Filling in is safe to start with: it never changes what is there.
+  let mode = local.get('importMode', 'fill');
   $app.innerHTML = `
     ${largeTitle(t('add.title'))}
     <section class="section">
@@ -1999,6 +2005,14 @@ function addView() {
     }),
   );
   tagsInput.addEventListener('input', syncChips);
+  // The tags go to words already in the library as well, which the preview lists.
+  let tagsTimer;
+  const onTags = () => {
+    clearTimeout(tagsTimer);
+    tagsTimer = setTimeout(() => items.length && renderPreview(), 250);
+  };
+  tagsInput.addEventListener('input', onTags);
+  $$('.tag-chips .chip').forEach((c) => c.addEventListener('click', onTags));
 
   function parse() {
     const fromFile = file ? file.items.filter((it) => !removed.has(it.raw)).map((it) => ({ ...it, fromFile: true })) : [];
@@ -2007,7 +2021,8 @@ function addView() {
     for (const it of items) {
       Object.assign(it, fills.get(it.raw));
       const key = `${it.article}|${it.lemma.toLowerCase()}`;
-      it.dup = Boolean(S.findDuplicate(it.lemma, it.article)) || seen.has(key);
+      it.existing = seen.has(key) ? null : S.findDuplicate(it.lemma, it.article);
+      it.dup = Boolean(it.existing) || seen.has(key);
       seen.add(key);
     }
     renderPreview();
@@ -2071,11 +2086,20 @@ function addView() {
     fills.set(it.raw, { ...fills.get(it.raw), ...patch });
   };
 
+  // What each row matching a word in the library would change in it, against its latest copy.
+  const patchOf = (it) => {
+    const w = it.existing && (state.words.get(it.existing.id) || it.existing);
+    return w ? updateFor(w, it, mode, tagList()) : {};
+  };
+  const updates = () => items.filter((it) => it.existing && Object.keys(patchOf(it)).length);
+  const fieldList = (keys) => keys.map(columnName).join(locale().startsWith('zh') ? '、' : ', ');
+
   const headerText = () => {
     const fresh = items.filter((i) => !i.dup).length;
-    const dup = items.length - fresh;
+    const up = updates().length;
+    const skip = items.length - fresh - up;
     const miss = items.filter((x) => !x.dup && isIncomplete(x)).length;
-    return [t('add.new', { n: fresh }), dup ? t('add.dup', { n: dup }) : '', miss ? t('add.missing', { n: miss }) : '']
+    return [t('add.new', { n: fresh }), up ? t('add.update', { n: up }) : '', skip ? t('add.dup', { n: skip }) : '', miss ? t('add.missing', { n: miss }) : '']
       .filter(Boolean)
       .join(' · ');
   };
@@ -2083,15 +2107,29 @@ function addView() {
   function renderPreview() {
     const box = $('#preview');
     const fresh = items.filter((i) => !i.dup);
+    const up = updates().length;
     $('#tagsSection').hidden = $('#importSection').hidden = !items.length;
-    $('#import').disabled = !fresh.length;
-    $('#import').textContent = t('add.import', { n: fresh.length });
+    $('#import').disabled = !fresh.length && !up;
+    $('#import').textContent =
+      fresh.length && up ? t('add.importBoth', { n: fresh.length, u: up }) : up ? t('add.updateOnly', { n: up }) : t('add.import', { n: fresh.length });
     if (!items.length) {
       box.innerHTML = '';
       return;
     }
     const hidden = items.length - PREVIEW_LIMIT;
+    const existing = items.filter((it) => it.existing).length;
     box.innerHTML = `
+      ${
+        existing
+          ? `<section class="section">
+              <div class="section-header">${t('add.existingHead', { n: existing })}</div>
+              <div class="list"><div class="row"><div class="segmented in-row" id="modeSeg">${['skip', 'fill', 'replace']
+                .map((m) => `<button type="button" data-m="${m}" class="${m === mode ? 'on' : ''}">${t(`add.mode.${m}`)}</button>`)
+                .join('')}</div></div></div>
+              <div class="section-footer">${t(`add.modeFoot.${mode}`)}</div>
+            </section>`
+          : ''
+      }
       <section class="section">
         <div class="section-header" id="pvHead">${headerText()}</div>
         <div class="list">
@@ -2102,8 +2140,11 @@ function addView() {
               const forms = it.forms ? `<span class="secondary t-sub"> · ${esc(it.forms)}</span>` : '';
               const kind = it.pos === 'sentence' || it.pos === 'phrase' ? `<span class="kind">${posLabel(it.pos)}</span>` : '';
               let body = '';
-              if (it.dup) body = `<div class="row-sub">${t('add.exists')}</div>`;
-              else {
+              const changes = Object.keys(patchOf(it));
+              if (it.dup) {
+                const what = changes.length ? ` · ${t(mode === 'replace' ? 'add.willSet' : 'add.willFill', { list: fieldList(changes) })}` : '';
+                body = `<div class="row-sub">${t(it.existing ? 'add.exists' : 'add.twice')}${what}</div>`;
+              } else {
                 if (it.pos === 'noun' && !it.article) {
                   body += `<div class="pv-art">${ARTICLES.map((a) => `<button class="b-${a}" data-i="${i}" data-a="${a}" lang="de">${a}</button>`).join('')}</div>`;
                 }
@@ -2115,7 +2156,7 @@ function addView() {
               const lookLink = look
                 ? `<a class="lookup" href="${esc(look.href)}" target="_blank" rel="noopener noreferrer" title="${esc(t('dict.lookup', { name: look.name }))}">${ICON.search}<span>${t('dict.short')}</span></a>`
                 : '';
-              return `<div class="row pv ${it.dup ? 'dup' : ''}">
+              return `<div class="row pv ${it.dup && !changes.length ? 'dup' : ''}">
                 <div class="row-main"><div class="pv-head"><div lang="de">${kind}${wordHTML(it)}${pl}${forms}</div>${lookLink}</div>${body}${it.example && !it.dup ? `<div class="row-sub" lang="de">${esc(it.example)}</div>` : ''}</div>
                 <button class="x" data-i="${i}" aria-label="${t('add.remove')}">✕</button>
               </div>`;
@@ -2125,6 +2166,13 @@ function addView() {
         </div>
         <div class="section-footer">${esc(t('add.previewFoot'))}</div>
       </section>`;
+    $$('#modeSeg button', box).forEach((b) =>
+      b.addEventListener('click', () => {
+        mode = b.dataset.m;
+        local.set('importMode', mode);
+        renderPreview();
+      }),
+    );
     // Removing a row removes its line from the text, or drops it from the file.
     $$('.pv .x', box).forEach((b) =>
       b.addEventListener('click', () => {
@@ -2163,11 +2211,15 @@ function addView() {
     const base = Date.now();
     const words = items
       .filter((i) => !i.dup)
-      .map(({ fromFile, dup, raw, ...i }) => S.makeWord({ ...i, tags: [...new Set([...(i.tags || []), ...tags])], batch: base }));
+      .map(({ fromFile, dup, raw, existing, ...i }) => S.makeWord({ ...i, tags: [...new Set([...(i.tags || []), ...tags])], batch: base }));
     // keep the pasted order
     words.forEach((w, i) => (w.createdAt = base + i));
     await S.addWords(words);
-    toast(t('add.imported', { n: words.length }));
+    // Words already in the library get what the list adds to them; their progress stays.
+    const patches = new Map(updates().map((it) => [it.existing.id, patchOf(it)]));
+    const changed = [...patches.keys()].map((id) => state.words.get(id)).filter(Boolean);
+    if (changed.length) await S.updateWords(changed, (w) => Object.assign(w, patches.get(w.id)));
+    toast(changed.length ? t('add.importedBoth', { n: words.length, u: changed.length }) : t('add.imported', { n: words.length }));
     items = [];
     fills.clear();
     file = null;
@@ -2216,7 +2268,9 @@ function formatsView() {
     ['pos', 'help.col.pos'],
     ['forms', 'help.col.forms'],
     ['example, example_translation', 'help.col.example'],
+    ['notes', 'help.col.notes'],
     ['tags', 'help.col.tags'],
+    ['status', 'help.col.status'],
   ];
   const steps = (key, params) => `<ol class="steps">${t(key, params).split('\n').map((x) => `<li>${esc(x)}</li>`).join('')}</ol>`;
   const base = `${location.origin}${location.pathname}`;
@@ -2234,6 +2288,10 @@ function formatsView() {
         <button class="row action has-icon" id="template">${icon('down', 'green')}<div class="row-main">${t('add.template')}</div></button>
       </div>
       <div class="section-footer">${esc(t('help.csvBody'))}</div>
+    </section>
+    <section class="section">
+      <div class="section-header">${t('help.updateH')}</div>
+      <div class="list help-text"><p>${esc(t('help.updateBody'))}</p></div>
     </section>
     <section class="section">
       <div class="section-header">${t('help.excelH')}</div>

@@ -126,7 +126,7 @@ export function makeWord(f) {
     updatedAt: now,
     editedAt: now,
     batch: f.batch || now,
-    suspended: false,
+    suspended: Boolean(f.suspended),
     deleted: false,
     cards: {}, // a card appears with its first answer
     dirty: true,
@@ -135,10 +135,12 @@ export function makeWord(f) {
 
 const dupKey = (lemma, article) => `${(article || '').toLowerCase()}|${lemma.trim().toLowerCase()}`;
 
+// A noun is the same word only with the same article (der See, die See), but a line that gives
+// no article, as many lists don't, is taken to mean the noun already there.
 export function findDuplicate(lemma, article) {
   const key = dupKey(lemma, article);
   for (const w of state.words.values()) {
-    if (!w.deleted && dupKey(w.lemma, w.pos === 'noun' ? w.article : article) === key) return w;
+    if (!w.deleted && dupKey(w.lemma, w.pos === 'noun' && article ? w.article : article) === key) return w;
   }
   return null;
 }

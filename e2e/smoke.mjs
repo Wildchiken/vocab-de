@@ -225,6 +225,21 @@ async function run(name, engine) {
       await page.evaluate(async () => (await import('/js/store.js')).liveWords().some((w) => w.lemma === 'Fahrkarte' && w.plural === 'Fahrkarten')),
     );
 
+    // The same list again, edited in a spreadsheet: words already there are filled in, not skipped
+    const bahnhofs = () => page.evaluate(async () => (await import('/js/store.js')).liveWords().filter((w) => w.lemma === 'Bahnhof'));
+    const [listed] = await bahnhofs();
+    const edited = join(dir, 'reise-2.csv');
+    await writeFile(edited, 'lemma,meaning,notes,tags\nBahnhof,station,Hauptbahnhof = main station,Reise\n');
+    await page.locator('#fileInput').setInputFiles(edited);
+    await page.locator('#modeSeg').waitFor();
+    assert.equal(await page.locator('#import').innerText(), 'Update 1 word');
+    await page.locator('#import').tap();
+    assert.deepEqual(
+      (await bahnhofs()).map((w) => [w.zh, w.notes, w.tags]),
+      [[listed.zh, 'Hauptbahnhof = main station', [...listed.tags, 'Reise']]],
+      'filled in once, the meaning already there kept',
+    );
+
     // Prefill from a link, dictionary links on the edit page
     await page.evaluate(() => (location.hash = '#add?text=die%20Haltestelle&example=Die%20Haltestelle%20ist%20dort.&tag=Reise'));
     await page.waitForSelector('#pvHead');
