@@ -18,6 +18,12 @@ test('plural spec', () => {
   assert.equal(pluralFromSpec('Mutter', '¨'), 'Mütter');
   assert.equal(pluralFromSpec('Milch', 'nur Sg.'), '—');
   assert.equal(pluralFromSpec('Auto', '-s'), 'Autos');
+  // a compound's plural given for its last part
+  assert.equal(pluralFromSpec('Lieblingsfach', '-fächer'), 'Lieblingsfächer');
+  assert.equal(pluralFromSpec('Fahrrad', '-räder'), 'Fahrräder');
+  assert.equal(pluralFromSpec('Fach', '-fächer'), 'Fächer');
+  assert.equal(pluralFromSpec('Kellnerin', '-nen'), 'Kellnerinnen');
+  assert.equal(parseLine('das Lieblingsfach, -fächer favourite subject').plural, 'Lieblingsfächer');
 });
 
 test('parse lines', () => {

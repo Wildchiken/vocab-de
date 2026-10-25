@@ -24,7 +24,17 @@ export function umlautize(word) {
   return pre + nv + post + ending;
 }
 
-// Expands dictionary plural markers (-e, ¨-er, -, -n, ...) to the full plural.
+const fold = (s) => s.toLowerCase().replace(/[äöü]/g, (c) => ({ ä: 'a', ö: 'o', ü: 'u' })[c]);
+
+// Lists often give a compound's plural for its last part only: "das Fahrrad, -räder".
+// Returns where that part starts in the lemma, or -1 for an ordinary ending.
+function restatedTail(lemma, suffix) {
+  const s = fold(suffix);
+  for (let i = 0; i <= lemma.length - 3; i++) if (s.startsWith(fold(lemma.slice(i)))) return i;
+  return -1;
+}
+
+// Expands dictionary plural markers (-e, ¨-er, -, -n, -räder, ...) to the full plural.
 export function pluralFromSpec(lemma, spec) {
   spec = spec.trim();
   if (!spec) return '';
@@ -33,6 +43,9 @@ export function pluralFromSpec(lemma, spec) {
   if (/^[A-ZÄÖÜ]/.test(spec)) return spec;
   const umlaut = /[¨"]/.test(spec);
   const suffix = spec.replace(/[-–¨"]/g, '');
+  const tail = umlaut ? -1 : restatedTail(lemma, suffix);
+  if (tail > 0) return lemma.slice(0, tail) + suffix;
+  if (tail === 0) return suffix[0].toUpperCase() + suffix.slice(1);
   return (umlaut ? umlautize(lemma) : lemma) + suffix;
 }
 

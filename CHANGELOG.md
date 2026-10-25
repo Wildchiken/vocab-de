@@ -5,6 +5,7 @@
 - Word lists (CSV) carry notes in import, export and the template. Word classes can be written out in English, German or Chinese (noun, Verb, 名词), and a status column can bring words in suspended.
 - Importing a list with words already in your library: Skip, Fill in (only empty fields, plus the tags of the batch; the default) or Update (what the file has replaces what is there), with each row saying what it will change. Nothing is erased and review progress stays, so exporting a list, editing it in a spreadsheet and importing it again works.
 - A line without an article is taken as the noun already in the list (Bahnhof is der Bahnhof) instead of adding it a second time.
+- A plural given for the last part of a compound (das Fahrrad, -räder) now reads as Fahrräder, not Fahrradräder.
 
 - Study modes on the home screen: Recognize (default), Recall, Choice, Listen, Spell and Article. All of them ask about the same word and update the same schedule. Spelling is no longer a separate card that appears in the day's reviews, and "Pick the article first" is now the option "Ask the article of nouns when recognizing", off by default.
 - Free practice uses the same modes and has an entry on the home screen; it replaces the article drill.
