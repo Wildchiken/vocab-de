@@ -1,6 +1,6 @@
 import { idb } from './db.js';
 import { newCard, schedule, recheck, rechecking, dayStart, DAY, MIN } from './fsrs.js';
-import { ARTICLES } from './german.js';
+import { ARTICLES, repairLegacyPlural } from './german.js';
 
 // One schedule per word. However a word is asked (see the study modes in app.js), the answer
 // updates this same card. Words from earlier versions may still carry 'article' and 'spell'
@@ -61,7 +61,7 @@ function logId() {
 }
 
 export async function load() {
-  const [words, logs, settings, extraNew, lastBackup, days] = await Promise.all([
+  let [words, logs, settings, extraNew, lastBackup, days] = await Promise.all([
     idb.all('words'),
     idb.all('logs'),
     idb.getKV('settings', null),
@@ -69,6 +69,23 @@ export async function load() {
     idb.getKV('lastBackup', 0),
     idb.getKV('days', {}),
   ]);
+  const correction = (w) => w && !w.deleted && w.pos === 'noun' && repairLegacyPlural(w.lemma, w.plural);
+  const repairs = words.filter(correction);
+  if (repairs.length) {
+    try {
+      await idb.patchMany('words', repairs.map((w) => w.id), (w) => {
+        const plural = correction(w);
+        if (!plural) return;
+        const time = Math.max(Date.now(), (w.updatedAt || 0) + 1, (w.editedAt || 0) + 1);
+        return { ...w, plural, editedAt: time, updatedAt: time, dirty: true };
+      });
+    } catch {
+      // No completion marker: an aborted repair retains every original record
+      // and can retry next time. It must not make the existing library unusable.
+      console.warn('Plural repair deferred; saved data retained.');
+    }
+    words = await idb.all('words');
+  }
   if (extraNew) state.extraNew = extraNew;
   state.lastBackup = lastBackup;
   state.days = new Map(Object.entries(days));

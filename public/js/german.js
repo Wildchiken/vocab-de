@@ -49,6 +49,20 @@ export function pluralFromSpec(lemma, spec) {
   return (umlaut ? umlautize(lemma) : lemma) + suffix;
 }
 
+// Earlier imports appended a restated stem literally: Fahrrad + räder. Stored
+// words have no original import line, so repair only that exact duplication
+// with an ordinary plural ending. Leave other spellings and lists alone.
+export function repairLegacyPlural(lemma, plural) {
+  if (typeof lemma !== 'string' || typeof plural !== 'string' || !/^[A-ZÄÖÜ][a-zäöüß]+$/.test(lemma)) return '';
+  if (!plural.startsWith(lemma)) return '';
+  const suffix = plural.slice(lemma.length);
+  if (!/^[a-zäöüß]{3,}$/.test(suffix)) return '';
+  const tail = restatedTail(lemma, suffix);
+  if (tail < 0 || !/^(?:e|n|en|er|s|es|nen)?$/.test(suffix.slice(lemma.length - tail))) return '';
+  const corrected = pluralFromSpec(lemma, '-' + suffix);
+  return corrected !== plural ? corrected : '';
+}
+
 // Separator between the German and its meaning. A "-" right after a comma is a plural
 // marker ("der Lehrer, -"), not a separator.
 const SEP = /(?<![,，])(?:\s+[-–—=|]\s+|\s*[:：=]\s+)/;

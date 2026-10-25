@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLine, pluralFromSpec, umlautize, checkSpelling, articleRule } from '../public/js/german.js';
+import { parseLine, pluralFromSpec, repairLegacyPlural, umlautize, checkSpelling, articleRule } from '../public/js/german.js';
 
 test('umlaut', () => {
   assert.equal(umlautize('Apfel'), 'Äpfel');
@@ -48,6 +48,23 @@ test('parse lines', () => {
   assert.equal(p.plural, 'Tische');
   assert.equal(parseLine('# 注释'), null);
   assert.equal(parseLine('   '), null);
+});
+
+test('legacy plural repairs only an exact repeated stem and ordinary plural ending', () => {
+  for (const [lemma, stored, expected] of [
+    ['Fahrrad', 'Fahrradräder', 'Fahrräder'],
+    ['Lieblingsfach', 'Lieblingsfachfächer', 'Lieblingsfächer'],
+    ['Fach', 'Fachfächer', 'Fächer'],
+  ]) {
+    assert.equal(repairLegacyPlural(lemma, stored), expected);
+    assert.equal(repairLegacyPlural(lemma, expected), '', 'a corrected plural is never rewritten');
+  }
+  for (const [lemma, stored] of [
+    ['Fahrrad', 'Fahrräder'], ['Fahrrad', 'Räder'], ['Kellnerin', 'Kellnerinnen'],
+    ['Tisch', 'Tische'], ['Lehrer', 'Lehrer'], ['Artist', 'Artistartistisch'],
+    ['Fahrrad', 'Fahrradräder / Fahrräder'], ['Fahrrad', 'FahrradRäder'],
+    ['PKW', 'PKWpkw'], ['E-Mail', 'E-Mailmails'], ['Fahrrad', null], [null, 'Fahrradräder'],
+  ]) assert.equal(repairLegacyPlural(lemma, stored), '', `${lemma}: leave ${stored} alone`);
 });
 
 test('parse lines with non-Chinese meanings', () => {

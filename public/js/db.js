@@ -55,6 +55,30 @@ export const idb = {
   },
   put: (store, value) => tx(store, 'readwrite', (s) => s.put(value)),
   putMany: (store, values) => tx(store, 'readwrite', (s) => values.forEach((v) => s.put(v))),
+  // Re-read each current record under the write lock. A repair must never
+  // overwrite a newer review or edit with a previously loaded word snapshot.
+  async patchMany(store, keys, patch) {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction(store, 'readwrite'), s = t.objectStore(store);
+      let changed = 0, failure;
+      t.oncomplete = () => resolve(changed);
+      t.onabort = () => reject(failure || t.error);
+      t.onerror = () => {}; // Abort reports the whole transaction, after rollback.
+      for (const key of keys) {
+        const req = s.get(key);
+        req.onsuccess = () => {
+          try {
+            const next = req.result && patch(req.result);
+            if (next) { s.put(next); changed++; }
+          } catch (err) {
+            failure = err;
+            t.abort();
+          }
+        };
+      }
+    });
+  },
   del: (store, key) => tx(store, 'readwrite', (s) => s.delete(key)),
   delMany: (store, keys) => tx(store, 'readwrite', (s) => keys.forEach((k) => s.delete(k))),
   clear: (store) => tx(store, 'readwrite', (s) => s.clear()),
