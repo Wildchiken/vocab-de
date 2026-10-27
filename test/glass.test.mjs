@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { roundedRect, overlayAt, fieldAt, overlayPixels, fieldPixels, toneTable, filterMarkup, Spring, SPRINGS, rubberBand } from '../public/js/glass.js';
+import { roundedRect, overlayAt, fieldAt, overlayPixels, fieldPixels, fieldSlices, sliceBoxes, PARTS, toneTable, filterMarkup, Spring, SPRINGS, rubberBand } from '../public/js/glass.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} ≈ ${b}`);
 
@@ -69,8 +69,9 @@ test('the material follows the calibrated tone curve', () => {
   near(light[32], 0.935, 1e-3);
   const dark = toneTable(true);
   near(dark[0], 0.0945, 1e-4);
-  const markup = filterMarkup('f', 'data:,', 100, 40, false, 60);
+  const markup = filterMarkup('f', Object.fromEntries(PARTS.map((p) => [p, 'data:,'])), false, 60);
   assert.match(markup, /feDisplacementMap in="mix" in2="field" scale="120"/);
+  assert.equal(markup.match(/data-part=/g).length, 9);
   assert.match(markup, /stdDeviation="7.33"/);
   assert.match(markup, /mode="lighten"/);
 });
@@ -95,4 +96,37 @@ test('springs settle and overshoot as named, rubber bands resist', () => {
   near(rubberBand(0, 10), 0);
   assert.ok(rubberBand(100, 10) < 10 && rubberBand(100, 10) > rubberBand(20, 10));
   assert.ok(rubberBand(-20, 10) < 0);
+});
+
+test('the field put together from slices is the field drawn at full size', () => {
+  for (const [w, h, r] of [[343, 62, 31], [60, 52, 26], [44, 44, 22], [320, 240, 39], [120, 44, 12]]) {
+    const c = Math.min(Math.ceil(Math.max(r, 20)), Math.floor(Math.min(w, h) / 2));
+    const slices = fieldSlices(r, c);
+    const boxes = sliceBoxes(w, h, c);
+    const full = fieldPixels(w, h, r);
+    // corners win over edges, edges over the middle, as the filter merges them
+    const order = ['tl', 'tr', 'bl', 'br', 'top', 'bottom', 'left', 'right', 'mid'];
+    let worst = 0;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const part = order.find((p) => {
+          const [bx, by, bw, bh] = boxes[p];
+          return x >= bx && x < bx + bw && y >= by && y < by + bh;
+        });
+        assert.ok(part, `${w}×${h}: (${x}, ${y}) is covered`);
+        let value = [128, 128];
+        if (part !== 'mid') {
+          const map = slices[part];
+          const [bx, by, bw, bh] = boxes[part];
+          const sx = Math.min(map.width - 1, Math.floor(((x - bx) * map.width) / bw));
+          const sy = Math.min(map.height - 1, Math.floor(((y - by) * map.height) / bh));
+          const k = (sy * map.width + sx) * 4;
+          value = [map.data[k], map.data[k + 1]];
+        }
+        const k = (y * full.width + x) * 4;
+        worst = Math.max(worst, Math.abs(value[0] - full.data[k]), Math.abs(value[1] - full.data[k + 1]));
+      }
+    }
+    assert.ok(worst <= 1, `${w}×${h} r${r}: off by ${worst}`);
+  }
 });

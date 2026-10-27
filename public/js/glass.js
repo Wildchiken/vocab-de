@@ -136,13 +136,64 @@ export function toneTable(dark) {
   });
 }
 
-export function filterMarkup(id, field, w, h, dark, refraction) {
+// A surface's maps are drawn once per corner radius and put together for any size, as a nine-slice:
+// four corners, four edges stretched along their length, and the middle. The edges of a rounded
+// rectangle are the same all along, so this is exact, and a surface that changes size mid-animation
+// (the tab bar collapsing) only moves the pieces instead of drawing new maps.
+export const PARTS = ['tl', 'tr', 'bl', 'br', 'top', 'bottom', 'left', 'right'];
+
+function crop(map, x, y, width, height) {
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let j = 0; j < height; j++) data.set(map.data.subarray(((y + j) * map.width + x) * 4, ((y + j) * map.width + x + width) * 4), j * width * 4);
+  return { width, height, data };
+}
+
+// The field in slices `c` CSS px deep: at least the corner radius and the 20px the bending reaches.
+export function fieldSlices(r, c) {
+  const full = fieldPixels(2 * c + 2, 2 * c + 2, r);
+  const far = c + 2;
+  return {
+    tl: crop(full, 0, 0, c, c),
+    tr: crop(full, far, 0, c, c),
+    bl: crop(full, 0, far, c, c),
+    br: crop(full, far, far, c, c),
+    top: crop(full, c, 0, 1, c),
+    bottom: crop(full, c, far, 1, c),
+    left: crop(full, 0, c, c, 1),
+    right: crop(full, far, c, c, 1),
+  };
+}
+
+// Where each slice goes on a w×h surface. Edges and the middle reach 1px under their neighbours,
+// so no seam is left uncovered (an uncovered pixel would bend the backdrop by the full amount).
+export function sliceBoxes(w, h, c) {
+  const mx = Math.max(0, w - 2 * c);
+  const my = Math.max(0, h - 2 * c);
+  return {
+    mid: [c - 1, c - 1, mx + 2, my + 2],
+    top: [c - 1, 0, mx + 2, c],
+    bottom: [c - 1, h - c, mx + 2, c],
+    left: [0, c - 1, c, my + 2],
+    right: [w - c, c - 1, c, my + 2],
+    tl: [0, 0, c, c],
+    tr: [w - c, 0, c, c],
+    bl: [0, h - c, c, c],
+    br: [w - c, h - c, c, c],
+  };
+}
+
+// The filter for Regular glass: the field put together from its slices, the frosted backdrop,
+// bent by the field, then toned. glass.js places the slices for the surface's size.
+export function filterMarkup(id, slices, dark, refraction) {
   const m = dark ? REGULAR.dark : REGULAR.light;
   const table = toneTable(dark).join(' ');
   const funcs = ['R', 'G', 'B'].map((c) => `<feFunc${c} type="table" tableValues="${table}"/>`).join('');
+  const order = ['mid', 'top', 'bottom', 'left', 'right', 'tl', 'tr', 'bl', 'br'];
   return (
     `<filter id="${id}" x="0" y="0" width="1" height="1" filterUnits="objectBoundingBox" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">` +
-    `<feImage href="${field}" x="0" y="0" width="${w}" height="${h}" preserveAspectRatio="none" result="field"/>` +
+    `<feFlood data-part="mid" flood-color="rgb(128,128,128)" result="mid"/>` +
+    PARTS.map((p) => `<feImage data-part="${p}" href="${slices[p]}" preserveAspectRatio="none" result="${p}"/>`).join('') +
+    `<feMerge result="field">${order.map((p) => `<feMergeNode in="${p}"/>`).join('')}</feMerge>` +
     `<feGaussianBlur in="SourceGraphic" stdDeviation="${REGULAR.blur}" edgeMode="duplicate" result="frost"/>` +
     `<feGaussianBlur in="SourceGraphic" stdDeviation="${m.fillSigma}" edgeMode="duplicate" result="fill"/>` +
     `<feBlend in="frost" in2="fill" mode="${dark ? 'darken' : 'lighten'}" result="blend"/>` +
@@ -274,11 +325,11 @@ function radius(el, w, h) {
   return Math.min(r, w / 2, h / 2);
 }
 
-function setRefraction(s, filter) {
+function setRefraction(s, id) {
   const el = s.el;
-  if (filter) {
-    el.style.setProperty('-webkit-backdrop-filter', `url("#${s.id}")`);
-    el.style.setProperty('backdrop-filter', `url("#${s.id}")`);
+  if (id) {
+    el.style.setProperty('-webkit-backdrop-filter', `url("#${id}")`);
+    el.style.setProperty('backdrop-filter', `url("#${id}")`);
     el.dataset.lgRefract = '';
   } else if (el.dataset.lgRefract !== undefined) {
     el.style.removeProperty('-webkit-backdrop-filter');
@@ -287,54 +338,102 @@ function setRefraction(s, filter) {
   }
 }
 
-// Draws a surface for its current size. While the size keeps changing (the tab bar collapsing,
-// a dialog growing) the last maps are stretched and the bending pauses; a new size is drawn once
-// it has held still for a moment, since a map takes a few milliseconds.
-function draw(s, settled = false) {
-  const el = s.el;
-  const w = el.offsetWidth;
-  const h = el.offsetHeight;
-  if (!w || !h) return;
-  const now = performance.now();
-  const changed = w !== s.w || h !== s.h;
-  if (changed && s.w && !settled && now - s.at < 150) {
-    s.at = now;
-    setRefraction(s, false);
-    clearTimeout(s.timer);
-    s.timer = setTimeout(() => draw(s, true), 160);
-    return;
+// A new image is decoded before anything shows it: an SVG filter whose map has not loaded yet
+// would bend the whole backdrop for a frame.
+const decodedImages = new Map();
+function decoded(url) {
+  if (!decodedImages.has(url)) {
+    const img = new Image();
+    img.src = url;
+    decodedImages.set(url, img.decode().catch(() => {}));
   }
-  s.at = now;
+  return decodedImages.get(url);
+}
+const frames = (n) => new Promise((resolve) => (function next() { n-- > 0 ? requestAnimationFrame(next) : resolve(); })());
+
+function place(filter, w, h, c) {
+  const boxes = sliceBoxes(w, h, c);
+  for (const node of filter.querySelectorAll('[data-part]')) {
+    const [x, y, width, height] = boxes[node.dataset.part];
+    node.setAttribute('x', x);
+    node.setAttribute('y', y);
+    node.setAttribute('width', width);
+    node.setAttribute('height', height);
+  }
+}
+
+// A surface changed size: its pieces move at once. New maps (a new corner radius, the other
+// color scheme) are drawn the first time straight away, later once the shape holds still for a
+// moment, so a shape that is animating keeps its current maps meanwhile.
+function draw(s) {
+  const w = s.el.offsetWidth;
+  const h = s.el.offsetHeight;
+  if (!w || !h) return;
   s.w = w;
   s.h = h;
-  const r = radius(el, w, h);
+  if (s.filter) place(s.filter, w, h, s.c);
+  clearTimeout(s.timer);
+  if (s.drawn) s.timer = setTimeout(() => refresh(s), 150);
+  else refresh(s);
+}
+
+async function refresh(s) {
+  const { el, w, h } = s;
+  s.drawn = true;
+  const r = Math.round(radius(el, w, h) * 2) / 2;
   const dark = darkQuery.matches;
-  const dpr = Math.min(3, window.devicePixelRatio || 1);
-  const overlay = remember(`o${w}|${h}|${r}|${dpr}|${dark}`, () => toURL(overlayPixels(w, h, r, dpr, dark)));
-  el.style.setProperty('--lg-overlay', `url("${overlay}")`);
-  el.dataset.lg = '';
-  const refraction = parseFloat(getComputedStyle(el).getPropertyValue('--lg-refraction')) || 0;
-  if (!refraction || !canRefract() || !el.classList.contains('glass')) return setRefraction(s, false);
-  const field = remember(`f${w}|${h}|${r}`, () => toURL(fieldPixels(w, h, r)));
-  const markup = filterMarkup(s.id, field, w, h, dark, refraction);
-  if (s.markup !== markup) {
-    s.filter?.remove();
-    const holder = document.createElementNS(ns, 'svg');
-    holder.innerHTML = markup;
-    s.filter = holder.firstChild;
-    defs.append(s.filter);
-    s.markup = markup;
+  const ds = Math.max(1, Math.min(3, Math.round(window.devicePixelRatio || 1)));
+  const c = Math.ceil(r);
+  const okey = `${r}|${ds}|${dark}`;
+  if (s.okey !== okey) {
+    s.okey = okey;
+    const url = remember(`o${okey}`, () => toURL(overlayPixels(2 * c + 2, 2 * c + 2, r, ds, dark)));
+    await decoded(url);
+    if (s.okey === okey) {
+      el.style.setProperty('--lg-overlay', `url("${url}")`);
+      el.style.setProperty('--lg-slice', String((c + 2) * ds));
+      el.style.setProperty('--lg-slice-w', `${c + 2}px`);
+      el.dataset.lg = '';
+    }
   }
-  setRefraction(s, true);
+  const refraction = parseFloat(getComputedStyle(el).getPropertyValue('--lg-refraction')) || 0;
+  if (!refraction || !canRefract() || !el.classList.contains('glass')) {
+    setRefraction(s, null);
+    s.filter?.remove();
+    s.filter = s.fkey = null;
+    return;
+  }
+  const slice = Math.max(1, Math.min(Math.ceil(Math.max(r, 20)), Math.floor(Math.min(w, h) / 2)));
+  const fkey = `${r}|${slice}|${dark}|${refraction}`;
+  if (s.fkey === fkey) return;
+  s.fkey = fkey;
+  const urls = remember(`f${r}|${slice}`, () => Object.fromEntries(Object.entries(fieldSlices(r, slice)).map(([k, v]) => [k, toURL(v)])));
+  await Promise.all(Object.values(urls).map(decoded));
+  // Built beside the one in use and switched to a couple of frames later, once it has rendered.
+  const holder = document.createElementNS(ns, 'svg');
+  holder.innerHTML = filterMarkup(`${s.id}-${++serial}`, urls, dark, refraction);
+  const filter = holder.firstChild;
+  place(filter, s.w, s.h, slice);
+  defs.append(filter);
+  await frames(2);
+  if (s.fkey !== fkey || !el.isConnected) return filter.remove();
+  const old = s.filter;
+  s.filter = filter;
+  s.c = slice;
+  place(filter, s.w, s.h, slice);
+  setRefraction(s, filter.id);
+  old?.remove();
 }
 
 const resized = typeof ResizeObserver === 'function' ? new ResizeObserver((entries) => entries.forEach((e) => surfaces.has(e.target) && draw(surfaces.get(e.target)))) : null;
 
+// The tab lens is sized by its own animation, which redraws it; observing it as well would
+// resize it from inside a resize callback, which browsers report as a loop.
 function add(el) {
   if (surfaces.has(el)) return;
-  const s = { el, id: `lg-${++serial}`, w: 0, h: 0, at: 0 };
+  const s = { el, id: `lg-${++serial}`, w: 0, h: 0 };
   surfaces.set(el, s);
-  resized.observe(el);
+  if (!el.matches('.tab-pill')) resized.observe(el);
   draw(s);
 }
 
@@ -343,6 +442,7 @@ function remove(el) {
   if (!s) return;
   clearTimeout(s.timer);
   s.filter?.remove();
+  s.fkey = s.okey = 'removed';
   resized.unobserve(el);
   surfaces.delete(el);
   animators.delete(el);
@@ -515,6 +615,10 @@ function selectionLens(list, indicator) {
   let drag = null;
   let moved = false;
   let suppress = false;
+  // The lens springs only when it has somewhere to go: another tab, or back from a drag. When
+  // the bar itself changes size (collapsing while scrolling) it stays on its tab, frame by frame.
+  let shown = null;
+  let sliding = false;
   const vertical = () => getComputedStyle(list).flexDirection === 'column';
   const tabs = () => [...list.querySelectorAll('a')].filter((a) => a.offsetWidth);
   const box = (tab) =>
@@ -547,6 +651,7 @@ function selectionLens(list, indicator) {
     const choice = nearest(local(client(e)) - drag.grab);
     const dragged = moved;
     end();
+    sliding = true;
     kick(self);
     if (dragged && choice) {
       // The browser's own click would land wherever the finger is; the lens decides, once.
@@ -591,7 +696,11 @@ function selectionLens(list, indicator) {
         ready = false;
         return Boolean(drag);
       }
-      if (!ready || reducedMotion.matches) {
+      if (active !== shown) {
+        sliding = ready;
+        shown = active;
+      }
+      if (!ready || reducedMotion.matches || (!sliding && !drag)) {
         pos.jump(target.pos);
         cross.jump(target.cross);
         length.jump(target.length);
@@ -617,20 +726,38 @@ function selectionLens(list, indicator) {
         thickness.target = target.thickness;
       }
       for (const spring of [pos, cross, length, thickness]) spring.step(dt);
-      const stretch = Math.min(0.2, Math.abs(pos.velocity) * 0.00035) * (drag ? 1 : 0.6);
-      const along = 1 + stretch;
-      const across = 1 / Math.sqrt(1 + stretch);
-      const v = vertical();
-      write(indicator, 'left', `${(v ? cross.value : pos.value).toFixed(3)}px`);
-      write(indicator, 'top', `${(v ? pos.value : cross.value).toFixed(3)}px`);
-      write(indicator, 'width', `${(v ? thickness.value : length.value).toFixed(3)}px`);
-      write(indicator, 'height', `${(v ? length.value : thickness.value).toFixed(3)}px`);
-      write(indicator, 'scale', stretch > 1e-4 ? (v ? `${across.toFixed(4)} ${along.toFixed(4)}` : `${along.toFixed(4)} ${across.toFixed(4)}`) : '');
-      if (drag && moved) indicator.dataset.lifted = '';
-      else delete indicator.dataset.lifted;
+      if (sliding && !drag && [pos, cross, length, thickness].every((spring) => spring.settled)) sliding = false;
+      apply();
       return Boolean(drag) || [pos, cross, length, thickness].some((spring) => !spring.settled);
     },
+    // The bar or a tab changed size. Called from a ResizeObserver, after layout and before paint,
+    // so a lens that is staying on its tab moves in the same frame as the bar, not one behind.
+    sync() {
+      const active = list.querySelector('a.active');
+      if (!ready || drag || sliding || active !== shown || !active?.offsetWidth) return kick(self);
+      const target = box(active);
+      pos.jump(target.pos);
+      cross.jump(target.cross);
+      length.jump(target.length);
+      thickness.jump(target.thickness);
+      apply();
+    },
   };
+  function apply() {
+    const stretch = Math.min(0.2, Math.abs(pos.velocity) * 0.00035) * (drag ? 1 : 0.6);
+    const along = 1 + stretch;
+    const across = 1 / Math.sqrt(1 + stretch);
+    const v = vertical();
+    write(indicator, 'left', `${(v ? cross.value : pos.value).toFixed(3)}px`);
+    write(indicator, 'top', `${(v ? pos.value : cross.value).toFixed(3)}px`);
+    write(indicator, 'width', `${(v ? thickness.value : length.value).toFixed(3)}px`);
+    write(indicator, 'height', `${(v ? length.value : thickness.value).toFixed(3)}px`);
+    write(indicator, 'scale', stretch > 1e-4 ? (v ? `${across.toFixed(4)} ${along.toFixed(4)}` : `${along.toFixed(4)} ${across.toFixed(4)}`) : '');
+    if (drag && moved) indicator.dataset.lifted = '';
+    else delete indicator.dataset.lifted;
+    const s = surfaces.get(indicator);
+    if (s && (Math.round(thickness.value) !== (v ? s.w : s.h) || Math.round(length.value) !== (v ? s.h : s.w))) draw(s);
+  }
   return self;
 }
 
@@ -665,7 +792,7 @@ export function startGlass() {
       });
     }
   }).observe(document.body, { childList: true, subtree: true });
-  const redraw = () => surfaces.forEach((s) => ((s.w = 0), draw(s)));
+  const redraw = () => surfaces.forEach(refresh);
   darkQuery.addEventListener('change', redraw);
   reducedTransparency.addEventListener('change', redraw);
 
@@ -673,7 +800,9 @@ export function startGlass() {
   const pill = document.querySelector('.tab-pill');
   if (capsule && pill) {
     tabLens = selectionLens(capsule, pill);
-    new ResizeObserver(moveTabLens).observe(capsule);
+    const follow = new ResizeObserver(() => tabLens.sync());
+    follow.observe(capsule);
+    capsule.querySelectorAll('a').forEach((a) => follow.observe(a));
   }
 
   document.addEventListener(

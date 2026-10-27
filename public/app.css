@@ -172,12 +172,14 @@ kbd {
 }
 /* glass.js refracts it: the material is in the filter. */
 .glass[data-lg-refract] { background: none; }
-/* The rim, drawn by glass.js from Liquid Glass's shader for this surface's size: light where the
-   outline faces up or down, a soft glow inside it, and a dark hairline where it faces sideways
-   (just outside the outline, hence the 2px). Beneath the content, above the material. */
+/* The rim, drawn by glass.js from Liquid Glass's shader for this corner radius and stretched to
+   the surface as a nine-slice: light where the outline faces up or down, a soft glow inside it,
+   and a dark hairline where it faces sideways (just outside the outline, hence the 2px).
+   Beneath the content, above the material. */
 [data-lg]::after {
   content: ""; position: absolute; inset: -2px; z-index: -1; pointer-events: none;
-  background: var(--lg-overlay) 0 0 / 100% 100% no-repeat;
+  border: 0 solid transparent;
+  border-image: var(--lg-overlay) var(--lg-slice) fill / var(--lg-slice-w) stretch;
 }
 /* Before glass.js has drawn it: a hairline with the same idea. --rim-r is the corner radius. */
 .glass:not([data-lg])::after {
