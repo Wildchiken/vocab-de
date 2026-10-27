@@ -28,6 +28,12 @@
 - Records are a little smaller: rounded card numbers, no empty card for words not studied yet, and 12-character ids for new review entries.
 - Backups leave out deleted words and fields that are still empty, store the review history as short rows grouped by word, and put one record on each line. With 2,000 words and five months of reviews that is 1.4 MB instead of 2.2 MB. Backups from earlier versions still import.
 
+- Glass, after ideas from Liquid Glass (no WebGPU or new dependencies): the rim catches light where it faces up or down and is shaded at the sides, and pressed glass lights up from under the finger and swells a little instead of shrinking.
+- Motion follows real springs (generated as CSS curves by `scripts/springs.mjs`): pressing is quick and firm, letting go settles with a slight overshoot. Browsers without `linear()` easing keep the previous curves.
+- The selection in the tab bar and sidebar slides from tab to tab.
+- Content scrolling under the nav bar or the tab bar is blurred progressively, more toward the edge. The effect grows in over the first 32px of scrolling and is gone at the top and at the end of the page.
+- Dialogs open with their content coming out of a blur, and the corners of dialogs, the sidebar and the selection bar are concentric with the buttons inside them.
+
 ## 1.1.0
 
 Study
