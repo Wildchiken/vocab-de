@@ -19,6 +19,7 @@ import { itemsFromFile, toCSV, TEMPLATE_HEADER, updateFor } from './importer.js'
 import { speak, ttsAvailable } from './tts.js';
 import { play } from './sfx.js';
 import { dictLinks, lookupTerm } from './dict.js';
+import { startGlass, moveTabLens } from './glass.js';
 
 const $app = document.getElementById('app');
 const $nav = document.getElementById('navbar');
@@ -291,7 +292,6 @@ function setNav({ title = '', back = null, extra = '', large = true } = {}) {
 }
 const $tabbar = document.querySelector('.tabbar');
 const $capsule = document.querySelector('.tab-capsule');
-const $pill = document.querySelector('.tab-pill');
 
 // How strongly the scroll edges blur what is under the bars: nothing while no content is under
 // them, all of it once 32px are, eased in between (as Liquid Glass's scroll edges do). Written on
@@ -324,41 +324,7 @@ window.addEventListener('scroll', onScroll, { passive: true });
 new ResizeObserver(() => setEdges()).observe($app);
 window.addEventListener('resize', () => setEdges());
 
-// The selection in the tab bar is one piece that slides from tab to tab, stretching a little on
-// the way. Anything else (a resize, the bar collapsing or coming back) moves it without sliding.
-function placePill(slide = false) {
-  const a = $capsule.querySelector('a.active');
-  const shown = Boolean(a?.offsetWidth);
-  slide &&= shown && $capsule.classList.contains('has-pill');
-  $capsule.classList.toggle('pill-snap', !slide);
-  if (shown) {
-    const box = { x: a.offsetLeft, y: a.offsetTop, w: a.offsetWidth, h: a.offsetHeight };
-    for (const [k, v] of Object.entries(box)) $pill.style.setProperty(`--pill-${k}`, `${v}px`);
-  }
-  $capsule.classList.toggle('has-pill', shown);
-  if (slide) {
-    $pill.classList.remove('stretch');
-    void $pill.offsetWidth;
-    $pill.classList.add('stretch');
-  }
-}
-new ResizeObserver(() => placePill()).observe($capsule);
-
-// Pressed glass lights up from under the finger: the light starts where the press is. Mice light
-// it a little on hover too, following the pointer.
-function lightGlass(e) {
-  const g = e.target.closest?.('a.glass, button.glass, .tab-capsule');
-  if (!g || (e.type === 'pointermove' && e.pointerType !== 'mouse')) return;
-  const r = g.getBoundingClientRect();
-  const w = g.offsetWidth || 1;
-  const h = g.offsetHeight || 1;
-  // The rect is scaled while the glass swells; the gradient is drawn in its own size.
-  g.style.setProperty('--glow-x', `${(((e.clientX - r.left) * w) / (r.width || 1)).toFixed(1)}px`);
-  g.style.setProperty('--glow-y', `${(((e.clientY - r.top) * h) / (r.height || 1)).toFixed(1)}px`);
-  g.style.setProperty('--glow-r', `${Math.max(36, Math.min(180, Math.max(w, h) * 0.9)).toFixed(0)}px`);
-}
-document.addEventListener('pointerdown', lightGlass, { passive: true });
-document.addEventListener('pointermove', lightGlass, { passive: true });
+startGlass();
 
 $capsule.addEventListener('click', (e) => {
   if (!document.body.classList.contains('tab-min') || matchMedia('(min-width: 1000px)').matches) return;
@@ -440,7 +406,7 @@ function route() {
   // The add button sits outside the capsule; with nothing active inside it, a collapsed
   // capsule would be an empty bubble.
   document.body.classList.toggle('tab-outside', !document.querySelector('.tab-capsule a.active'));
-  placePill(true);
+  moveTabLens();
   window.scrollTo(0, 0);
   lastY = 0;
   document.body.classList.remove('tab-min');

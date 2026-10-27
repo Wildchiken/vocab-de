@@ -25,17 +25,20 @@
   --label-3: rgba(60, 60, 67, 0.3);
   --sep: rgba(60, 60, 67, 0.2);
 
-  --glass: rgba(255, 255, 255, 0.58);
+  /* Regular glass where the browser cannot refract (Safari, Firefox): Liquid Glass's 7.33px
+     frost, its chroma, and its tone curve fitted as a veil (the curve maps v to about
+     0.303 + 0.647 v, which is this color at this opacity). Chromium draws the exact material
+     in glass.js. */
+  --glass: rgba(219, 219, 219, 0.353);
   --glass-strong: rgba(255, 255, 255, 0.78);
   --glass-rim: rgba(255, 255, 255, 0.9);
   --glass-rim-low: rgba(255, 255, 255, 0.35);
   --glass-edge: rgba(0, 0, 0, 0.06);
   --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
-  --glass-blur: blur(22px) saturate(190%);
+  --glass-blur: blur(7.33px) saturate(110%);
   /* The rim of the glass: light where it faces up or down, shade where it faces sideways. */
   --rim-light: rgba(255, 255, 255, 0.95);
   --rim-shade: rgba(0, 0, 0, 0.16);
-  --rim-diffuse: rgba(255, 255, 255, 0.5);
   --glow-color: rgba(255, 255, 255, 0.3);
   --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 30px rgba(0, 0, 0, 0.06);
 
@@ -86,7 +89,8 @@
     --label-2: rgba(235, 235, 245, 0.6);
     --label-3: rgba(235, 235, 245, 0.3);
     --sep: rgba(84, 84, 88, 0.6);
-    --glass: rgba(44, 44, 48, 0.55);
+    --glass: rgba(94, 94, 94, 0.341);
+    --glass-blur: blur(7.33px) saturate(106%);
     --glass-strong: rgba(58, 58, 62, 0.75);
     --glass-rim: rgba(255, 255, 255, 0.28);
     --glass-rim-low: rgba(255, 255, 255, 0.08);
@@ -94,7 +98,6 @@
     --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
     --rim-light: rgba(255, 255, 255, 0.5);
     --rim-shade: rgba(0, 0, 0, 0.5);
-    --rim-diffuse: rgba(255, 255, 255, 0.12);
     --glow-color: rgba(255, 255, 255, 0.16);
     --card-shadow: none;
     color-scheme: dark;
@@ -158,25 +161,27 @@ kbd {
 @media (hover: none) { kbd { display: none; } }
 
 .glass {
-  position: relative;
-  background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 45%),
-    var(--glass);
+  position: relative; isolation: isolate;
+  background: var(--glass);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
-  box-shadow:
-    inset 0 3px 5px -3px var(--rim-diffuse),
-    inset 0 -3px 5px -3px var(--rim-diffuse),
-    0 0 0 0.5px var(--glass-edge),
-    var(--glass-shadow);
+  box-shadow: var(--glass-shadow);
   --rim-r: 22px;
+  /* How far the edge bends what is behind it, in CSS px (Liquid Glass's default). */
+  --lg-refraction: 60;
 }
-/* The rim, after the overlay of Liquid Glass (github.com/Glass-HQ/liquid-glass): a hairline that
-   is brightest where the outline faces up or down and fades out around the curves (by the time
-   it faces 60° away), over a shade where it faces sideways. --rim-r is the corner radius; on a
-   capsule that is where the curve turns. */
-.glass::after, #toast::after {
-  content: ""; position: absolute; inset: 0; z-index: 1; border-radius: inherit; pointer-events: none; padding: 1px;
+/* glass.js refracts it: the material is in the filter. */
+.glass[data-lg-refract] { background: none; }
+/* The rim, drawn by glass.js from Liquid Glass's shader for this surface's size: light where the
+   outline faces up or down, a soft glow inside it, and a dark hairline where it faces sideways
+   (just outside the outline, hence the 2px). Beneath the content, above the material. */
+[data-lg]::after {
+  content: ""; position: absolute; inset: -2px; z-index: -1; pointer-events: none;
+  background: var(--lg-overlay) 0 0 / 100% 100% no-repeat;
+}
+/* Before glass.js has drawn it: a hairline with the same idea. --rim-r is the corner radius. */
+.glass:not([data-lg])::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; padding: 1px;
   background:
     linear-gradient(to bottom, var(--rim-light), transparent calc(var(--rim-r) * 0.53),
       transparent calc(100% - var(--rim-r) * 0.53), var(--rim-light)),
@@ -186,27 +191,22 @@ kbd {
   -webkit-mask-composite: xor;
   mask-composite: exclude;
 }
-/* Pressed glass lights up from within, starting under the finger (app.js sets --glow-x/y/r). */
+/* Light from within, where the glass is touched (--glow and its position from glass.js). */
 .glass:is(a, button, .tab-capsule)::before {
-  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
   background: radial-gradient(var(--glow-r, 64px) circle at var(--glow-x, 50%) var(--glow-y, 50%), var(--glow-color), transparent);
-  opacity: 0; transition: opacity 0.42s var(--ease);
+  opacity: var(--glow, 0);
 }
-@media (hover: hover) and (pointer: fine) {
-  .glass:is(a, button, .tab-capsule):hover::before { opacity: 0.35; }
-}
-.glass:is(a, button, .tab-capsule):active::before { opacity: 1; transition-duration: 0.12s; }
-.glass:is(a, button):disabled::before { opacity: 0; }
 @media (prefers-reduced-transparency: reduce) {
   :root { --glass: var(--glass-strong); }
   .glass { -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
 @media (prefers-contrast: more) {
   .glass { box-shadow: 0 0 0 1px var(--label-3), var(--glass-shadow); }
-  .glass::after, #toast::after { display: none; }
+  .glass::after, .tab-pill::after { display: none; }
 }
 @media (forced-colors: active) {
-  .glass::before, .glass::after, #toast::after { display: none; }
+  .glass::before, .glass::after, .tab-pill::after { display: none; }
 }
 
 /* Transparent nav bar with floating buttons. Content that scrolls under it is blurred more the
@@ -250,9 +250,7 @@ kbd {
   display: grid; place-items: center; cursor: pointer; transition: var(--release);
   -webkit-user-drag: none;
 }
-/* Glass swells under a press by about 8px whatever its size (capped at 16%), instead of
-   shrinking away from the finger. */
-.nav-icon:active, .nav-back:active { transform: scale(1.16); transition: var(--press); }
+
 .nav-icon svg { width: 24px; height: 24px; }
 .nav-back svg { width: 12px; height: 19px; margin-right: 2px; }
 .nav-back span { display: none; }
@@ -278,30 +276,23 @@ kbd {
 .tab-capsule {
   display: flex; align-items: center; height: var(--tab-h); padding: 4px; border-radius: 31px; --rim-r: 31px;
   flex: 1; max-width: 360px;
-  transition: max-width var(--spring-layout-t) var(--spring-layout), height var(--spring-layout-t) var(--spring-layout), var(--release);
+  transition: max-width var(--spring-layout-t) var(--spring-layout), height var(--spring-layout-t) var(--spring-layout);
 }
-.tab-capsule:active { transform: scale(1.022); transition: max-width var(--spring-layout-t) var(--spring-layout), height var(--spring-layout-t) var(--spring-layout), var(--press); }
-body.tab-min .tab-capsule:active { transform: scale(1.14); }
 .tab-capsule a {
   position: relative; flex: 1; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
   border-radius: 27px; font-size: 10px; font-weight: 600; color: var(--label); letter-spacing: 0.01em;
   transition: background 0.25s, color 0.2s; -webkit-user-drag: none;
 }
 .tab-capsule a.active { color: var(--tint); background: var(--fill); }
-/* The selection is one piece that slides from tab to tab and stretches a little on the way
-   (app.js places it); without it, the active tab has its own background. */
+/* The selection is a lens that glass.js springs from tab to tab and lets a finger drag across;
+   without it, the active tab has its own background. */
 .tab-pill {
-  position: absolute; left: 0; top: 0; width: var(--pill-w, 0); height: var(--pill-h, 0); border-radius: 27px;
-  transform: translate(var(--pill-x, 0), var(--pill-y, 0)); background: var(--fill); pointer-events: none; opacity: 0;
-  transition: transform var(--spring-layout-t) var(--spring-layout), width var(--spring-layout-t) var(--spring-layout),
-    height var(--spring-layout-t) var(--spring-layout), opacity 0.2s;
+  position: absolute; left: 0; top: 0; width: 0; height: 0; border-radius: 999px; isolation: isolate;
+  background: var(--fill); pointer-events: none; opacity: 0; transition: opacity 0.2s;
 }
-.tab-capsule.pill-snap .tab-pill { transition: opacity 0.2s; }
 .tab-capsule.has-pill .tab-pill { opacity: 1; }
 .tab-capsule.has-pill a.active { background: none; }
-.tab-pill.stretch { animation: pill-stretch-x var(--spring-layout-t) var(--ease); }
-@keyframes pill-stretch-x { 35% { scale: 1.1 0.9; } }
-@keyframes pill-stretch-y { 35% { scale: 0.94 1.12; } }
+.tab-pill[data-lifted] { background: var(--fill-2); }
 .tabbar svg { width: 26px; height: 26px; }
 .tabbar svg.o { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .tabbar svg.f { display: none; fill: currentColor; stroke: none; }
@@ -315,11 +306,7 @@ body.tab-min .tab-capsule:active { transform: scale(1.14); }
   display: grid; place-items: center; color: var(--tint); -webkit-user-drag: none;
   transition: var(--release), width var(--spring-layout-t) var(--spring-layout), height var(--spring-layout-t) var(--spring-layout);
 }
-.tab-add:active {
-  transform: scale(1.13);
-  transition: var(--press), width var(--spring-layout-t) var(--spring-layout), height var(--spring-layout-t) var(--spring-layout);
-}
-body.tab-min .tab-add:active { transform: scale(1.15); }
+
 .tab-add svg { width: 26px; height: 26px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
 .tab-add span { display: none; }
 .tab-add.active { color: #fff; background: linear-gradient(170deg, rgba(255, 255, 255, 0.28), transparent 55%), var(--tint); }
@@ -387,8 +374,7 @@ body.in-session .tabbar { display: none; }
   .tab-capsule a svg { width: 24px; height: 24px; color: var(--tint); }
   .tab-capsule a.active { background: var(--tint-fill); color: var(--tint); }
   .tab-pill { border-radius: 14px; background: var(--tint-fill); }
-  .tab-pill.stretch { animation-name: pill-stretch-y; }
-  .tab-capsule:active, body.tab-min .tab-capsule:active { transform: none; }
+  .tab-capsule { --lg-refraction: 0; }
   .tab-add {
     width: auto; height: 46px; border-radius: 23px; display: flex; gap: 8px; justify-content: center;
     margin-top: auto; font-weight: 600; color: #fff;
@@ -397,7 +383,7 @@ body.in-session .tabbar { display: none; }
     -webkit-backdrop-filter: none; backdrop-filter: none;
   }
   .tab-add svg { width: 20px; height: 20px; }
-  .tab-add:active, body.tab-min .tab-add:active { transform: scale(0.97); }
+
   .tab-add span { display: inline; }
   body.tab-min .tab-capsule { max-width: none; height: auto; }
   body.tab-min .tab-capsule a:not(.active) { display: flex; }
@@ -476,12 +462,20 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
 .switch::after {
   content: ""; position: absolute; top: 2px; left: 2px; width: 38px; height: 24px; border-radius: 12px;
   background: #fff; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15), 0 0 0 0.5px rgba(0, 0, 0, 0.04);
-  transition: transform var(--spring-switch-t) var(--spring-switch), width 0.2s var(--ease);
+  transition: transform var(--spring-switch-t) var(--spring-switch), scale var(--spring-release-t) var(--spring-release),
+    background-color 0.2s, box-shadow 0.2s;
 }
-.switch:active::after { width: 44px; }
+/* Pressed, the thumb lifts into a clear lens over the track, as Liquid Glass's switch does: it
+   grows by 9px each side across and 5.5px along, and lets the track color through. */
+.switch:active::after {
+  scale: 1.47 1.46; background-color: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.95), inset 0 -0.5px 0 rgba(255, 255, 255, 0.6),
+    inset 0.5px 0 0 rgba(0, 0, 0, 0.16), inset -0.5px 0 0 rgba(0, 0, 0, 0.16), 0 3px 10px rgba(0, 0, 0, 0.12);
+  transition: transform var(--spring-switch-t) var(--spring-switch), scale var(--spring-press-t) var(--spring-press),
+    background-color 0.12s, box-shadow 0.12s;
+}
 .switch:checked { background: var(--green); }
 .switch:checked::after { transform: translateX(22px); }
-.switch:checked:active::after { transform: translateX(16px); }
 
 .stepper { display: flex; flex: none; background: var(--fill); border-radius: 17px; height: 34px; }
 .stepper button {
@@ -578,7 +572,7 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
   width: 44px; height: 44px; border: none; color: var(--label); display: grid; place-items: center; cursor: pointer; border-radius: 22px;
   transition: var(--release), opacity 0.2s;
 }
-.icon-btn:active { transform: scale(1.16); transition: var(--press), opacity 0.2s; }
+
 .icon-btn svg { width: 22px; height: 22px; }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .card-area { flex: 1; display: flex; flex-direction: column; justify-content: center; padding: 6px 0 14px; }
@@ -741,9 +735,7 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
   width: fit-content; max-width: 560px; margin: 0 auto; text-align: center; line-height: 1.35;
   transform: translateY(-16px) scale(0.9); opacity: 0; pointer-events: none;
   transition: opacity 0.25s var(--ease), transform var(--spring-morph-t) var(--spring-morph);
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.22), transparent 45%), var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-  box-shadow: inset 0 1px 0 var(--glass-rim), 0 0 0 0.5px var(--glass-edge), var(--glass-shadow);
+  background: var(--glass-strong); --lg-refraction: 0;
   color: var(--label); font-size: 0.88rem; font-weight: 600;
   padding: 12px 20px; border-radius: 24px; --rim-r: 24px;
 }
@@ -751,7 +743,7 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .glass:active, body.tab-min .glass:active { transform: none; }
+  .switch:active::after { scale: none; }
 }
 
 :focus { outline: none; }
@@ -787,7 +779,7 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
   height: 44px; padding: 0 18px; border: none; border-radius: 22px; color: var(--label);
   font-size: 1rem; font-weight: 600; cursor: pointer; transition: var(--release);
 }
-.nav-pill:active { transform: scale(1.09); transition: var(--press); }
+
 
 /* Word list header: the count, and practice for what the filters show */
 .list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
@@ -843,7 +835,7 @@ body.selecting .tabbar { display: none; }
 /* Concentric: the radius is the buttons' (23) plus the 16px around them. */
 .dialog {
   width: min(320px, 100%); border-radius: 39px; padding: 22px 16px 16px; text-align: center; --rim-r: 39px;
-  background: linear-gradient(160deg, rgba(255, 255, 255, 0.22), transparent 45%), var(--glass-strong);
+  background: var(--glass-strong); --lg-refraction: 0;
   animation: pop var(--spring-morph-t) var(--spring-morph);
 }
 @keyframes pop { from { opacity: 0; transform: scale(0.9); } }
