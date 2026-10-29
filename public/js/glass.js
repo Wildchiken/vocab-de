@@ -606,19 +606,20 @@ function animatorFor(el) {
 // The tab bar's selection: one lens that springs from tab to tab, stretching along its path as
 // it moves, and that can be dragged across the bar to choose a tab. The tabs stay links: on a drag
 // the lens clicks the one it lands on.
+//
+// The springs hold only how far the lens is from its tab, never where the tab is. The bar can
+// change size while the lens is on its way (opening out of its collapsed state as a new page
+// shows), and the lens is always drawn at its tab's current place plus that offset: it slides
+// over without trailing the bar or spilling out of it.
 function selectionLens(list, indicator) {
-  const pos = new Spring(0, SPRINGS.layout);
-  const cross = new Spring(0, SPRINGS.layout);
-  const length = new Spring(0, SPRINGS.layout);
-  const thickness = new Spring(0, SPRINGS.layout);
-  let ready = false;
+  const KEYS = ['pos', 'cross', 'length', 'thickness'];
+  const offset = Object.fromEntries(KEYS.map((k) => [k, new Spring(0, SPRINGS.layout)]));
+  const springs = Object.values(offset);
+  let shown = null;
+  let drawn = null;
   let drag = null;
   let moved = false;
   let suppress = false;
-  // The lens springs only when it has somewhere to go: another tab, or back from a drag. When
-  // the bar itself changes size (collapsing while scrolling) it stays on its tab, frame by frame.
-  let shown = null;
-  let sliding = false;
   const vertical = () => getComputedStyle(list).flexDirection === 'column';
   const tabs = () => [...list.querySelectorAll('a')].filter((a) => a.offsetWidth);
   const box = (tab) =>
@@ -651,7 +652,6 @@ function selectionLens(list, indicator) {
     const choice = nearest(local(client(e)) - drag.grab);
     const dragged = moved;
     end();
-    sliding = true;
     kick(self);
     if (dragged && choice) {
       // The browser's own click would land wherever the finger is; the lens decides, once.
@@ -662,6 +662,7 @@ function selectionLens(list, indicator) {
   }
   function cancel(e) {
     if (drag && e.pointerId === drag.id) end();
+    kick(self);
   }
   list.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || reducedMotion.matches) return;
@@ -669,7 +670,7 @@ function selectionLens(list, indicator) {
     if (!tab || !list.contains(tab)) return;
     const at = local(client(e));
     // Grab the lens where it was touched; pressing another tab pulls it there.
-    const grab = tab.classList.contains('active') ? at - (pos.value + length.value / 2) : 0;
+    const grab = tab.classList.contains('active') && drawn ? at - (drawn.pos + drawn.length / 2) : 0;
     drag = { id: e.pointerId, start: client(e), client: client(e), grab };
     moved = false;
     window.addEventListener('pointermove', move);
@@ -687,26 +688,31 @@ function selectionLens(list, indicator) {
     },
     true,
   );
+  // The tab the lens belongs to and its box now, or null when no tab is showing it.
+  function locate() {
+    const active = list.querySelector('a.active');
+    if (!active?.offsetWidth) {
+      shown = drawn = null;
+      list.classList.remove('has-pill');
+      for (const spring of springs) spring.jump(0);
+      return null;
+    }
+    const target = box(active);
+    if (active !== shown) {
+      // Off to another tab: start from where the lens is drawn, keeping its speed.
+      for (const k of KEYS) offset[k].configure(SPRINGS.layout).jump(drawn && !reducedMotion.matches ? drawn[k] - target[k] : 0);
+      if (drawn && !reducedMotion.matches) for (const k of KEYS) offset[k].velocity = velocity[k];
+      shown = active;
+    }
+    list.classList.add('has-pill');
+    return target;
+  }
+  const velocity = { pos: 0, cross: 0, length: 0, thickness: 0 };
   const self = {
     frame(dt) {
-      const active = list.querySelector('a.active');
-      const target = active?.offsetWidth ? box(active) : null;
-      list.classList.toggle('has-pill', Boolean(target));
-      if (!target) {
-        ready = false;
-        return Boolean(drag);
-      }
-      if (active !== shown) {
-        sliding = ready;
-        shown = active;
-      }
-      if (!ready || reducedMotion.matches || (!sliding && !drag)) {
-        pos.jump(target.pos);
-        cross.jump(target.cross);
-        length.jump(target.length);
-        thickness.jump(target.thickness);
-        ready = true;
-      } else if (drag && moved) {
+      const target = locate();
+      if (!target) return Boolean(drag);
+      if (drag && moved && !reducedMotion.matches) {
         // Follow the finger, taking on the size of the tab passing beneath.
         const all = tabs().map(box);
         const min = Math.min(...all.map((b) => b.pos));
@@ -714,49 +720,39 @@ function selectionLens(list, indicator) {
         const under = nearest(local(drag.client) - drag.grab);
         const size = under ? box(under).length : target.length;
         const center = Math.max(min + size / 2, Math.min(max - size / 2, local(drag.client) - drag.grab));
-        pos.configure(SPRINGS.track).target = center - size / 2;
-        length.configure(SPRINGS.track).target = size;
-        cross.target = target.cross;
-        thickness.target = target.thickness;
+        offset.pos.configure(SPRINGS.track).target = center - size / 2 - target.pos;
+        offset.length.configure(SPRINGS.track).target = size - target.length;
       } else {
-        for (const spring of [pos, cross, length, thickness]) spring.configure(SPRINGS.layout);
-        pos.target = target.pos;
-        cross.target = target.cross;
-        length.target = target.length;
-        thickness.target = target.thickness;
+        for (const spring of springs) spring.configure(SPRINGS.layout).target = 0;
       }
-      for (const spring of [pos, cross, length, thickness]) spring.step(dt);
-      if (sliding && !drag && [pos, cross, length, thickness].every((spring) => spring.settled)) sliding = false;
-      apply();
-      return Boolean(drag) || [pos, cross, length, thickness].some((spring) => !spring.settled);
+      for (const spring of springs) spring.step(dt);
+      for (const k of KEYS) velocity[k] = offset[k].velocity;
+      apply(target);
+      return Boolean(drag) || springs.some((spring) => !spring.settled);
     },
     // The bar or a tab changed size. Called from a ResizeObserver, after layout and before paint,
-    // so a lens that is staying on its tab moves in the same frame as the bar, not one behind.
+    // so the lens moves with the bar in the same frame, never one behind.
     sync() {
-      const active = list.querySelector('a.active');
-      if (!ready || drag || sliding || active !== shown || !active?.offsetWidth) return kick(self);
-      const target = box(active);
-      pos.jump(target.pos);
-      cross.jump(target.cross);
-      length.jump(target.length);
-      thickness.jump(target.thickness);
-      apply();
+      const target = locate();
+      if (target) apply(target);
+      kick(self);
     },
   };
-  function apply() {
-    const stretch = Math.min(0.2, Math.abs(pos.velocity) * 0.00035) * (drag ? 1 : 0.6);
+  function apply(target) {
+    const stretch = Math.min(0.2, Math.abs(offset.pos.velocity) * 0.00035) * (drag ? 1 : 0.6);
     const along = 1 + stretch;
     const across = 1 / Math.sqrt(1 + stretch);
     const v = vertical();
-    write(indicator, 'left', `${(v ? cross.value : pos.value).toFixed(3)}px`);
-    write(indicator, 'top', `${(v ? pos.value : cross.value).toFixed(3)}px`);
-    write(indicator, 'width', `${(v ? thickness.value : length.value).toFixed(3)}px`);
-    write(indicator, 'height', `${(v ? length.value : thickness.value).toFixed(3)}px`);
+    drawn = Object.fromEntries(KEYS.map((k) => [k, target[k] + offset[k].value]));
+    write(indicator, 'left', `${(v ? drawn.cross : drawn.pos).toFixed(3)}px`);
+    write(indicator, 'top', `${(v ? drawn.pos : drawn.cross).toFixed(3)}px`);
+    write(indicator, 'width', `${(v ? drawn.thickness : drawn.length).toFixed(3)}px`);
+    write(indicator, 'height', `${(v ? drawn.length : drawn.thickness).toFixed(3)}px`);
     write(indicator, 'scale', stretch > 1e-4 ? (v ? `${across.toFixed(4)} ${along.toFixed(4)}` : `${along.toFixed(4)} ${across.toFixed(4)}`) : '');
     if (drag && moved) indicator.dataset.lifted = '';
     else delete indicator.dataset.lifted;
     const s = surfaces.get(indicator);
-    if (s && (Math.round(thickness.value) !== (v ? s.w : s.h) || Math.round(length.value) !== (v ? s.h : s.w))) draw(s);
+    if (s && (Math.round(drawn.thickness) !== (v ? s.w : s.h) || Math.round(drawn.length) !== (v ? s.h : s.w))) draw(s);
   }
   return self;
 }
@@ -834,6 +830,13 @@ export function startGlass() {
     },
     { passive: true },
   );
+  // Leaving the window, or the glass being replaced under a still mouse, puts the light out.
+  document.addEventListener('pointerout', (e) => {
+    if (e.pointerType === 'mouse' && !e.relatedTarget && hovered) {
+      animatorFor(hovered).hover(false, e);
+      hovered = null;
+    }
+  });
   document.addEventListener('keydown', (e) => {
     if ((e.key === ' ' || e.key === 'Enter') && !e.repeat && e.target.matches?.(INTERACTIVE)) animatorFor(e.target).key(true);
   });

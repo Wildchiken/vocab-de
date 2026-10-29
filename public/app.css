@@ -36,6 +36,9 @@
   --glass-edge: rgba(0, 0, 0, 0.06);
   --glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.1), 0 2px 6px rgba(0, 0, 0, 0.05);
   --glass-blur: blur(7.33px) saturate(110%);
+  /* Panels you read (messages, dialogs) are frosted more, so what is behind them never shows
+     through their text. */
+  --glass-blur-panel: blur(20px) saturate(140%);
   /* The rim of the glass: light where it faces up or down, shade where it faces sideways. */
   --rim-light: rgba(255, 255, 255, 0.95);
   --rim-shade: rgba(0, 0, 0, 0.16);
@@ -280,11 +283,21 @@ kbd {
   flex: 1; max-width: 360px;
   transition: max-width var(--spring-layout-t) var(--spring-layout), height var(--spring-layout-t) var(--spring-layout);
 }
-.tab-capsule a {
-  position: relative; flex: 1; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
-  border-radius: 27px; font-size: 10px; font-weight: 600; color: var(--label); letter-spacing: 0.01em;
-  transition: background 0.25s, color 0.2s; -webkit-user-drag: none;
+.tab-capsule {
+  /* A sideways drag moves the selection lens; only vertical ones are left to scrolling. */
+  touch-action: pan-y;
 }
+.tab-capsule a {
+  position: relative; flex: 1; min-width: 0; overflow: hidden; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  border-radius: 27px; font-size: 10px; font-weight: 600; color: var(--label); letter-spacing: 0.01em; white-space: nowrap;
+  transition: background 0.25s, color 0.2s, opacity 0.25s var(--ease) 0.12s; -webkit-user-drag: none;
+}
+/* Tabs and labels coming back as a collapsed bar opens out fade in once there is room, instead of
+   piling up in the narrow bar. */
+@starting-style {
+  .tab-capsule a, .tab-capsule a span { opacity: 0; }
+}
+.tab-capsule a span { transition: opacity 0.25s var(--ease) 0.12s; }
 .tab-capsule a.active { color: var(--tint); background: var(--fill); }
 /* The selection is a lens that glass.js springs from tab to tab and lets a finger drag across;
    without it, the active tab has its own background. */
@@ -376,7 +389,9 @@ body.in-session .tabbar { display: none; }
   .tab-capsule a svg { width: 24px; height: 24px; color: var(--tint); }
   .tab-capsule a.active { background: var(--tint-fill); color: var(--tint); }
   .tab-pill { border-radius: 14px; background: var(--tint-fill); }
-  .tab-capsule { --lg-refraction: 0; }
+  .tab-capsule { --lg-refraction: 0; touch-action: pan-x; }
+  /* A solid button here, not glass over the page: it keeps its color. */
+  .tab-add { --lg-refraction: 0; }
   .tab-add {
     width: auto; height: 46px; border-radius: 23px; display: flex; gap: 8px; justify-content: center;
     margin-top: auto; font-weight: 600; color: #fff;
@@ -738,10 +753,13 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
   transform: translateY(-16px) scale(0.9); opacity: 0; pointer-events: none;
   transition: opacity 0.25s var(--ease), transform var(--spring-morph-t) var(--spring-morph);
   background: var(--glass-strong); --lg-refraction: 0;
+  -webkit-backdrop-filter: var(--glass-blur-panel); backdrop-filter: var(--glass-blur-panel);
   color: var(--label); font-size: 0.88rem; font-weight: 600;
   padding: 12px 20px; border-radius: 24px; --rim-r: 24px;
 }
 #toast.show { opacity: 1; transform: none; }
+/* Below the nav bar, not over its buttons; on study screens, which have no nav bar, at the top. */
+body:not([data-view="study"], [data-view="article"], [data-view="practice"]) #toast { top: calc(env(safe-area-inset-top) + var(--nav-h) + 4px); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
@@ -838,6 +856,7 @@ body.selecting .tabbar { display: none; }
 .dialog {
   width: min(320px, 100%); border-radius: 39px; padding: 22px 16px 16px; text-align: center; --rim-r: 39px;
   background: var(--glass-strong); --lg-refraction: 0;
+  -webkit-backdrop-filter: var(--glass-blur-panel); backdrop-filter: var(--glass-blur-panel);
   animation: pop var(--spring-morph-t) var(--spring-morph);
 }
 @keyframes pop { from { opacity: 0; transform: scale(0.9); } }
@@ -959,3 +978,8 @@ body.dropping #app::after {
 .speak.listen { width: 96px; height: 96px; border-radius: 48px; }
 .speak.listen svg { width: 40px; height: 40px; }
 .recall-gap { height: 8px; }
+
+/* The panels' own frost (above) goes too when transparency is reduced. */
+@media (prefers-reduced-transparency: reduce) {
+  #toast, .dialog { -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
