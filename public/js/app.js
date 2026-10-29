@@ -8,6 +8,7 @@ import {
   articleRule,
   compoundBase,
   checkSpelling,
+  spellingDiff,
   displayWord,
   ARTICLES,
   NO_PLURAL,
@@ -70,6 +71,17 @@ function wordHTML(w) {
     return `<span class="g g-${w.article}"><span class="art">${w.article}</span> <span class="lemma">${esc(w.lemma)}</span></span>`;
   }
   return `<span class="g"><span class="lemma">${esc(w.lemma)}</span></span>`;
+}
+
+// A wrong spelling as typed, with what was left out marked in and what was extra struck through.
+// Only for a spelling that is close: against a different word altogether it would say nothing.
+function diffHTML(typed, expected) {
+  if (!typed.trim()) return '';
+  const ops = spellingDiff(typed, expected);
+  const same = ops.reduce((n, o) => n + (o.op === 'same' ? [...o.text].length : 0), 0);
+  if (same < 0.5 * [...typed.trim()].length || same < 0.4 * [...expected].length) return '';
+  const parts = ops.map(({ op, text }) => (op === 'same' ? esc(text) : op === 'missing' ? `<ins>${esc(text)}</ins>` : `<del>${esc(text)}</del>`));
+  return `<div class="spell-diff"><span class="secondary">${t('spell.yours')}</span> <span lang="de">${parts.join('')}</span></div>`;
 }
 
 const shortMeaning = (s) => (s || '').split(/[；;]/).slice(0, 2).join('；');
@@ -1328,6 +1340,7 @@ function sessionView({ from, forceMode = null }) {
       fb.innerHTML = `
         ${self ? '' : `<div class="fb-badge">${t(`spell.${cls}`)}</div>`}
         <div class="fb-word" lang="de">${wordHTML(w)}</div>
+        ${cls === 'near' || cls === 'bad' ? diffHTML(input.value, res.expected) : ''}
         ${res.why ? `<div class="fb-hint">${t(`spell.why.${res.why}`)}</div>` : ''}
         ${w.example ? `<div class="fb-hint" lang="de">${esc(w.example)}</div>` : ''}
         <a class="edit-link" href="${wordLink(w, from)}">${ICON.edit} ${t('edit')}</a>`;
@@ -1771,10 +1784,10 @@ function editView(id, from) {
   const misses = S.articleMisses(w);
   const progressRow = row({
     title: t(`st.${S.wordStatus(w)}`),
-    sub: [card.state === 'new' ? '' : t('edit.progressSub', { r: card.reps || 0, l: card.lapses || 0, d: card.s.toFixed(1) }), misses ? t('edit.articleMisses', { n: misses }) : '']
+    sub: [card.state === 'new' ? (w.suspended ? '' : t('edit.newSub')) : t('edit.progressSub', { r: card.reps || 0, l: card.lapses || 0, d: card.s.toFixed(1) }), misses ? t('edit.articleMisses', { n: misses }) : '']
       .filter(Boolean)
       .join(' · '),
-    detail: w.suspended ? '' : dueText(card),
+    detail: w.suspended || card.state === 'new' ? '' : dueText(card),
   });
   const noAutoFix = 'autocapitalize="off" autocorrect="off" spellcheck="false"';
   const dictionaries = dictLinks(lookupTerm(w), getLang());

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLine, pluralFromSpec, repairLegacyPlural, umlautize, checkSpelling, articleRule } from '../public/js/german.js';
+import { parseLine, pluralFromSpec, repairLegacyPlural, umlautize, checkSpelling, spellingDiff, articleRule } from '../public/js/german.js';
 
 test('umlaut', () => {
   assert.equal(umlautize('Apfel'), 'Äpfel');
@@ -97,4 +97,15 @@ test('article rules', () => {
   assert.equal(articleRule('Mädchen').article, 'das');
   assert.equal(articleRule('Frühling').article, 'der');
   assert.equal(articleRule('Tisch'), null);
+});
+
+test('a wrong spelling is shown with what was left out and what was extra', () => {
+  const show = (a, b) => spellingDiff(a, b).map((o) => (o.op === 'same' ? o.text : o.op === 'missing' ? `[${o.text}]` : `~${o.text}~`)).join('');
+  assert.equal(show('Tish', 'der Tisch'), '[der ]Tis[c]h');
+  assert.equal(show('der Tich', 'der Tisch'), 'der Ti[s]ch');
+  assert.equal(show('Strase', 'die Straße'), '[die ]Stra~s~[ß]e');
+  // edits a letter apart read as one: the wrong article struck, the right one put in
+  assert.equal(show('die Tisch', 'der Tisch'), 'd~ie~[er] Tisch');
+  assert.equal(show('xyz', 'Buch'), '~xyz~[Buch]');
+  assert.equal(show('Tisch', 'Tisch'), 'Tisch');
 });

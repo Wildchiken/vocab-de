@@ -277,6 +277,53 @@ function checkSentence(input, expected) {
   return { result: 'wrong', expected };
 }
 
+// What was typed against what was expected, letter by letter, for showing where a spelling
+// went wrong: [{ op: 'same' | 'missing' | 'extra', text }]. A wrong letter is the typed one as
+// extra followed by the right one as missing.
+export function spellingDiff(input, expected) {
+  const a = [...norm(input)];
+  const b = [...norm(expected)];
+  const d = Array.from({ length: a.length + 1 }, (_, i) => Array.from({ length: b.length + 1 }, (_, j) => (i ? (j ? 0 : i) : j)));
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  }
+  const ops = [];
+  const push = (op, ch) => (ops.at(-1)?.op === op ? (ops.at(-1).text = ch + ops.at(-1).text) : ops.push({ op, text: ch }));
+  let i = a.length;
+  let j = b.length;
+  while (i || j) {
+    if (i && j && a[i - 1] === b[j - 1] && d[i][j] === d[i - 1][j - 1]) {
+      push('same', a[--i]);
+      j--;
+    }
+    else if (j && d[i][j] === d[i][j - 1] + 1) push('missing', b[--j]);
+    else if (i && d[i][j] === d[i - 1][j] + 1) push('extra', a[--i]);
+    else {
+      push('missing', b[--j]);
+      push('extra', a[--i]);
+    }
+  }
+  ops.reverse();
+  // Edits only a letter apart read better as one: "die" struck and "der" put in, not d·i·e·r.
+  const merged = [];
+  for (let k = 0; k < ops.length; k++) {
+    if (ops[k].op === 'same') {
+      merged.push(ops[k]);
+      continue;
+    }
+    let end = k;
+    while (end + 2 < ops.length + 1 && ops[end + 1]?.op === 'same' && ops[end + 1].text.length <= 1 && ops[end + 2] && ops[end + 2].op !== 'same') end += 2;
+    while (ops[end + 1] && ops[end + 1].op !== 'same') end++;
+    const run = ops.slice(k, end + 1);
+    const typed = run.filter((o) => o.op !== 'missing').map((o) => o.text).join('');
+    const wanted = run.filter((o) => o.op !== 'extra').map((o) => o.text).join('');
+    if (typed) merged.push({ op: 'extra', text: typed });
+    if (wanted) merged.push({ op: 'missing', text: wanted });
+    k = end;
+  }
+  return merged;
+}
+
 // result: exact | near | wrong; why: case | noArticle | wrongArticle | oneLetter | typos
 export function checkSpelling(input, w) {
   const expected = displayWord(w);

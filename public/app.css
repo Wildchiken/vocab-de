@@ -440,6 +440,10 @@ a.row:active, button.row:active { background: var(--cell-hi); }
 .row-title { flex: 1; min-width: 0; }
 .row-sub { font-size: 0.88rem; color: var(--label-2); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row-detail { color: var(--label-2); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* A long detail wraps instead of squeezing the title down to one character a line: the title
+   keeps its own width (up to 60%), the detail takes the rest. */
+.row-main:has(+ .row-detail) { flex: 1 0 auto; max-width: 60%; }
+.row-detail { min-width: 0; white-space: normal; overflow-wrap: break-word; }
 .chev { width: 8px; height: 13px; flex: none; color: var(--label-3); }
 .row.action { color: var(--tint); }
 .row.destructive { color: var(--red); }
@@ -684,6 +688,9 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
 .feedback.bad .fb-badge { color: var(--die); }
 .feedback.near .fb-badge { color: var(--orange); }
 
+.spell-diff { margin-top: 6px; font-size: 1.05rem; }
+.spell-diff ins { text-decoration: none; color: var(--orange); background: color-mix(in srgb, var(--orange) 18%, transparent); border-radius: 4px; padding: 0 1px; }
+.spell-diff del { color: var(--red); text-decoration-thickness: 2px; }
 .big-zh { font-size: 1.6rem; font-weight: 700; line-height: 1.3; }
 .spell-form { margin: 22px auto 0; width: 100%; max-width: 440px; }
 .spell-form input {
@@ -760,6 +767,8 @@ textarea.bare, .field textarea { resize: none; line-height: 1.4; field-sizing: c
 #toast.show { opacity: 1; transform: none; }
 /* Below the nav bar, not over its buttons; on study screens, which have no nav bar, at the top. */
 body:not([data-view="study"], [data-view="article"], [data-view="practice"]) #toast { top: calc(env(safe-area-inset-top) + var(--nav-h) + 4px); }
+/* On study screens, below their bar of close, progress and undo. */
+body:is([data-view="study"], [data-view="article"], [data-view="practice"]) #toast { top: calc(env(safe-area-inset-top) + 64px); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

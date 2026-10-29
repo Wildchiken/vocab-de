@@ -33,7 +33,10 @@
 - Motion follows real springs (generated as CSS curves by `scripts/springs.mjs`): pressing is quick and firm, letting go settles with a slight overshoot. Browsers without `linear()` easing keep the previous curves.
 - The selection in the tab bar and sidebar is a lens that springs from tab to tab, stretching as it moves, and can be dragged across the bar to choose a tab.
 - Content scrolling under the nav bar or the tab bar is blurred progressively, more toward the edge. The effect grows in over the first 32px of scrolling and is gone at the top and at the end of the page.
-- Messages appear below the nav bar instead of over its buttons, and messages and dialogs are frosted enough that nothing behind shows through their text.
+- A wrong spelling that comes close is shown as typed, with the missing letters marked and the extra ones struck through (a wrong article as the whole word).
+- A word not studied yet says so on its page, instead of "New" twice; a practice round with no misses says that all words were known.
+- Rows with a long value (Storage in Settings) wrap the value instead of squeezing their title down to one character a line.
+- Messages appear below the nav bar (on study screens, below their top bar) instead of over its buttons, and messages and dialogs are frosted enough that nothing behind shows through their text.
 - Dialogs open with their content coming out of a blur, and the corners of dialogs, the sidebar and the selection bar are concentric with the buttons inside them.
 
 ## 1.1.0
